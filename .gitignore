@@ -1,0 +1,14 @@
+# Build artifacts
+build/
+*.o
+*.elf
+*.bin
+*.img
+*.log
+
+# Aero cache
+.aero-cache/
+
+# OS
+.DS_Store
+Thumbs.db

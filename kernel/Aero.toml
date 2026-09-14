@@ -1,0 +1,9 @@
+[package]
+name = "aeroos-riscv64"
+version = "26R1"
+edition = "2024"
+description = "AeroOS 26R1 kernel — riscv64 QEMU virt target (MVP)"
+
+[build]
+target = "riscv64-unknown-none"
+entry = "kernel_start"
