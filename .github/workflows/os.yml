@@ -1,0 +1,100 @@
+name: os
+
+# AeroOS 26R1 smoke test on QEMU riscv64 virt.
+#
+# Pipeline: download Aero 1.2.4 binary → build boot.S + uart.c + main.aero →
+# link flat ELF → boot in QEMU → verify UART prints "AeroOS 26R1 booting".
+#
+# We download the published aero-linux-x86_64 tarball rather than building the
+# compiler from source — the compiler is already release-tested on aero-lang's
+# CI and we only need the `aero build --emit-obj --target riscv64-unknown-none`
+# pipeline. This cuts ~15 min of LLVM/Cargo build time to ~2 min total.
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "kernel/**"
+      - "target/**"
+      - ".github/workflows/os.yml"
+  pull_request:
+    paths:
+      - "kernel/**"
+      - "target/**"
+      - ".github/workflows/os.yml"
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  qemu-riscv64:
+    name: riscv64 QEMU virt boot
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install LLVM 22 (apt.llvm.org)
+        run: |
+          wget -O - https://apt.llvm.org/llvm.sh | sudo bash -s 22
+          sudo apt-get install -y libpolly-22-dev
+          echo "/usr/lib/llvm-22/bin" >> "$GITHUB_PATH"
+
+      - name: Install QEMU riscv64
+        run: sudo apt-get update && sudo apt-get install -y qemu-system-riscv64 make
+
+      - name: Verify toolchain
+        run: |
+          llvm-config --version
+          clang --version
+          ld.lld --version
+          qemu-system-riscv64 --version | head -1
+
+      # Download the published Aero 1.2.4 Linux release. The tarball contains
+      # a single `aero` binary at the top level, so we extract directly.
+      - name: Download Aero 1.2.4 release
+        run: |
+          cd /tmp
+          curl -fsSLO https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/aero-1.2.4-linux-x86_64.tar.gz
+          tar -xzf aero-1.2.4-linux-x86_64.tar.gz
+          chmod +x aero
+          echo "/tmp" >> "$GITHUB_PATH"
+          aero --version
+
+      - name: Build AeroOS ELF
+        run: |
+          cd target/riscv64-qemu-virt
+          make clean
+          make
+          ls -la build/
+
+      - name: Verify boot section at 0x80000000
+        run: |
+          llvm-objdump -d build/AeroOS.elf | head -20
+          llvm-objdump -h build/AeroOS.elf | grep -E 'text.boot|\.text '
+
+      # Run the ELF in QEMU and capture UART output. start.S enters a wfi loop
+      # after kernel_start() returns, so we let it run 3 seconds then SIGTERM
+      # — the UART banner prints immediately on boot.
+      - name: Boot in QEMU and capture UART
+        run: |
+          cd target/riscv64-qemu-virt
+          timeout 3 qemu-system-riscv64 -machine virt -bios none \
+            -kernel build/AeroOS.elf -nographic -serial mon:stdio > /tmp/qemu.log 2>&1 || true
+          echo "=== QEMU UART output ==="
+          cat /tmp/qemu.log
+          echo ""
+          echo "=== Verification ==="
+          if grep -q "AeroOS 26R1 booting" /tmp/qemu.log; then
+            echo "PASS: boot banner printed"
+          else
+            echo "FAIL: boot banner not found in UART output"
+            exit 1
+          fi
+          if grep -q "OK" /tmp/qemu.log; then
+            echo "PASS: kernel returned successfully"
+          else
+            echo "FAIL: kernel did not print OK"
+            exit 1
+          fi
