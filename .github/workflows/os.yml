@@ -55,11 +55,10 @@ jobs:
       # a single `aero` binary at the top level, so we extract directly.
       - name: Download Aero 1.2.4 release
         run: |
-          cd /tmp
+          cd $RUNNER_TEMP
           curl -fsSLO https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/aero-v1.2.4-linux-x86_64.tar.gz
-          tar -xzf aero-v1.2.4-linux-x86_64.tar.gz
-          chmod +x aero
-          echo "/tmp" >> "$GITHUB_PATH"
+          tar -xzf aero-v1.2.4-linux-x86_64.tar.gz --no-same-owner bin/aero
+          chmod +x bin/aero && mv bin/aero /usr/local/bin/aero
           aero --version
 
       - name: Build AeroOS ELF
