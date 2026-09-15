@@ -1,19 +1,15 @@
 // AeroOS 26R1 — riscv64 kernel entry point.
 //
-// This is the very first thing Aero executes on boot. The boot assembly
-// (start.S) has already set up the stack and cleared BSS, so we can run
-// normal Aero code here — no hand-written prologue needed.
-//
-// For now: just return 0 to the boot assembly, which halts. UART driver
-// comes next in the sequence.
+// Boot assembly (start.S) has set up stack and cleared BSS before
+// calling us. We print a boot banner via NS16550 UART and halt.
 
-/// Kernel entry point. start.S calls us after setting up the environment.
-/// Returns 0 → boot assembly halts the CPU.
+extern "C" fn aeroos_uart_puts(msg: str);
+extern "C" fn aeroos_uart_putc(c: i64);
+
 #[entry]
 #[no_mangle]
-fn kernel_start() -> i64 {
-    // TODO (R1): print boot banner via NS16550 UART at 0x10000000
-    // TODO (R1): enable supervisor timer interrupt
-    // TODO (R1): start first idle thread
-    return 0
+fn kernel_start() {
+    aeroos_uart_puts("AeroOS 26R1 booting...\n");
+    aeroos_uart_puts("OK\n");
+    // On return, start.S halts the CPU (wfi loop).
 }

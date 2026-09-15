@@ -1,10 +1,11 @@
 # AeroOS 26R1 — riscv64 QEMU virt build
 #
 # Build pipeline:
-#   1. start.S → boot.o       (clang -c -target riscv64-unknown-elf)
-#   2. main.aero → kernel.o   (aero build --emit-obj)
-#   3. boot.o + kernel.o → AeroOS.elf  (ld.lld with linker.ld)
-#   4. (optional) run in QEMU
+#   1. start.S → boot.o       (clang)
+#   2. uart.c  → uart.o       (clang -nostdlib, NS16550 MMIO helpers)
+#   3. main.aero → kernel.o   (aero build --emit-obj)
+#   4. all .o  → AeroOS.elf   (ld.lld with custom linker script)
+#   5. run in QEMU virt
 
 TARGET  = riscv64-unknown-none
 CC      = clang
@@ -13,25 +14,36 @@ LD      = ld.lld
 QEMU    = qemu-system-riscv64
 
 BOOT_SRC = kernel/src/boot/riscv64/start.S
-BOOT_OBJ = build/boot.o
+UART_SRC = kernel/src/driver/riscv64/uart.c
 AERO_SRC = kernel/src/main.aero
-AERO_OBJ = build/kernel.o
 LINKER   = target/riscv64-qemu-virt/linker.ld
+
 ELF      = build/AeroOS.elf
+BOOT_OBJ = build/boot.o
+UART_OBJ = build/uart.o
+AERO_OBJ = build/kernel.o
 
 .PHONY: all clean run objdump
 
 all: $(ELF)
 
+# Pure assembly boot entry
 $(BOOT_OBJ): $(BOOT_SRC) | build
 	$(CC) -c -target riscv64-unknown-elf -march=rv64gc -mabi=lp64d \
 	      -nostdlib -o $@ $<
 
-$(AERO_OBJ): $(AERO_SRC) | build
-	$(AERO) build $< --emit-obj --target $(TARGET) --output $@
+# NS16550 MMIO helpers — plain C, no libc needed
+$(UART_OBJ): $(UART_SRC) | build
+	$(CC) -c -target riscv64-unknown-elf -march=rv64gc -mabi=lp64d \
+	      -nostdlib -ffreestanding -o $@ $<
 
-$(ELF): $(BOOT_OBJ) $(AERO_OBJ) $(LINKER) | build
-	$(LD) -T $(LINKER) -o $@ $(BOOT_OBJ) $(AERO_OBJ)
+# Aero kernel entry → riscv64 freestanding .o
+$(AERO_OBJ): $(AERO_SRC) | build
+	$(AERO) build $< --emit-obj --target $(TARGET)
+
+# Link all pieces into flat ELF
+$(ELF): $(BOOT_OBJ) $(UART_OBJ) $(AERO_OBJ) $(LINKER) | build
+	$(LD) -T $(LINKER) -o $@ $^
 
 build:
 	mkdir -p build
