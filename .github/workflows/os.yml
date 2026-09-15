@@ -56,8 +56,8 @@ jobs:
       - name: Download Aero 1.2.4 release
         run: |
           cd /tmp
-          curl -fsSLO https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/aero-1.2.4-linux-x86_64.tar.gz
-          tar -xzf aero-1.2.4-linux-x86_64.tar.gz
+          curl -fsSLO https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/aero-v1.2.4-linux-x86_64.tar.gz
+          tar -xzf aero-v1.2.4-linux-x86_64.tar.gz
           chmod +x aero
           echo "/tmp" >> "$GITHUB_PATH"
           aero --version
@@ -98,3 +98,4 @@ jobs:
             echo "FAIL: kernel did not print OK"
             exit 1
           fi
+
