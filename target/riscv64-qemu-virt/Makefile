@@ -1,59 +1,53 @@
 # AeroOS 26R1 — riscv64 QEMU virt build
-#
-# Build pipeline:
-#   1. start.S → boot.o       (clang)
-#   2. uart.c  → uart.o       (clang -nostdlib, NS16550 MMIO helpers)
-#   3. main.aero → kernel.o   (aero build --emit-obj)
-#   4. all .o  → AeroOS.elf   (ld.lld with custom linker script)
-#   5. run in QEMU virt
+# Run from repo root:  make -C target/riscv64-qemu-virt
 
-TARGET  = riscv64-unknown-none
-CC      = clang
-AERO    = aero
-LD      = ld.lld
-QEMU    = qemu-system-riscv64
+TARGET   = riscv64-unknown-none
+CC       = clang
+AERO     = aero
+LD       = ld.lld
+QEMU     = qemu-system-riscv64
 
-BOOT_SRC = kernel/src/boot/riscv64/start.S
-UART_SRC = kernel/src/driver/riscv64/uart.c
-AERO_SRC = kernel/src/main.aero
-LINKER   = target/riscv64-qemu-virt/linker.ld
+# Uniform abi across all objects — no hardware float, softfloat only
+CFLAGS  = -target riscv64-unknown-elf -march=rv64gc -mabi=lp64 \
+          -nostdlib -ffreestanding \
+          -ffunction-sections -fdata-sections \
+          -fno-unwind-tables -fno-asynchronous-unwind-tables
+LDFLAGS = --gc-sections
 
-ELF      = build/AeroOS.elf
-BOOT_OBJ = build/boot.o
-UART_OBJ = build/uart.o
-AERO_OBJ = build/kernel.o
-
-.PHONY: all clean run objdump
-
-all: $(ELF)
-
-# Pure assembly boot entry
-$(BOOT_OBJ): $(BOOT_SRC) | build
-	$(CC) -c -target riscv64-unknown-elf -march=rv64gc -mabi=lp64d \
-	      -nostdlib -o $@ $<
-
-# NS16550 MMIO helpers — plain C, no libc needed
-$(UART_OBJ): $(UART_SRC) | build
-	$(CC) -c -target riscv64-unknown-elf -march=rv64gc -mabi=lp64d \
-	      -nostdlib -ffreestanding -o $@ $<
-
-# Aero kernel entry → riscv64 freestanding .o
-$(AERO_OBJ): $(AERO_SRC) | build
-	$(AERO) build $< --emit-obj --target $(TARGET)
-
-# Link all pieces into flat ELF
-$(ELF): $(BOOT_OBJ) $(UART_OBJ) $(AERO_OBJ) $(LINKER) | build
-	$(LD) -T $(LINKER) -o $@ $^
+.PHONY: all clean run objdump nm
+all: build/AeroOS.elf
 
 build:
 	mkdir -p build
 
-run: $(ELF)
-	$(QEMU) -machine virt -bios none -kernel $(ELF) \
-	        -nographic -serial mon:stdio
+build/boot.o: ../../kernel/src/boot/riscv64/start.S | build
+	$(CC) -c $(CFLAGS) -o $@ $<
 
-objdump: $(ELF)
-	llvm-objdump -d -j .text.boot $(ELF) | head -40
+build/uart.o: ../../kernel/src/driver/riscv64/uart.c | build
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+build/libc_stub.o: ../../kernel/src/driver/riscv64/libc_stub.c | build
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+build/libgcc_stub.o: ../../kernel/src/driver/riscv64/libgcc_stub.c | build
+	$(CC) -c $(CFLAGS) -o $@ $<
+
+build/kernel.o: ../../kernel/src/main.aero | build
+	$(AERO) build $< --emit-obj --target $(TARGET)
+	mv ../../kernel/src/main.o build/kernel.o
+
+build/AeroOS.elf: build/boot.o build/uart.o build/kernel.o build/libc_stub.o build/libgcc_stub.o linker.ld
+	$(LD) $(LDFLAGS) -T linker.ld -o $@ \
+	    build/boot.o build/uart.o build/kernel.o build/libc_stub.o build/libgcc_stub.o
+
+run: build/AeroOS.elf
+	$(QEMU) -machine virt -nographic -monitor none -kernel $<
+
+objdump: build/AeroOS.elf
+	llvm-objdump -d -j .text.boot $< 2>&1 | head -30
+
+nm: build/AeroOS.elf
+	llvm-nm build/AeroOS.elf 2>&1 | grep -E " T | _start|kernel_start"
 
 clean:
-	rm -rf build
+	rm -rf build ../../kernel/src/main.o ../../kernel/src/*.o
