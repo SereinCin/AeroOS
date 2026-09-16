@@ -1,10 +1,10 @@
 // AeroOS 26R1 — riscv64 kernel entry point.
 //
-// Boot assembly (start.S) has set up stack and cleared BSS before
-// calling us. We print a boot banner via NS16550 UART and halt.
+// Boot assembly (start.S) has set up stack and cleared BSS.
+// Trap handler and timer interrupt are wired in trap.S + clint.c
+// but not yet enabled — MVP boot uses minimal setup.
 
 extern "C" fn aeroos_uart_puts(msg: str);
-extern "C" fn aeroos_uart_putc(c: i64);
 
 #[entry]
 #[no_mangle]
