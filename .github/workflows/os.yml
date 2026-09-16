@@ -57,8 +57,9 @@ jobs:
         run: |
           cd $RUNNER_TEMP
           curl -fsSLO https://github.com/SereinCin/aero-lang/releases/download/v1.2.4/aero-v1.2.4-linux-x86_64.tar.gz
-          tar -xzf aero-v1.2.4-linux-x86_64.tar.gz --no-same-owner bin/aero
-          chmod +x bin/aero && mv bin/aero /usr/local/bin/aero
+          mkdir -p aero-extract
+          tar -xzf aero-v1.2.4-linux-x86_64.tar.gz -C aero-extract --no-same-permissions --no-same-owner
+          chmod +x aero-extract/bin/aero && mv aero-extract/bin/aero /usr/local/bin/aero
           aero --version
 
       - name: Build AeroOS ELF
