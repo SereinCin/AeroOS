@@ -26,6 +26,10 @@ SECTIONS
     .stack (NOLOAD) : {
         . = ALIGN(16);
         *(.stack)
+        /* End of the resident kernel image; the physical frame allocator
+         * manages everything above this, up to the device tree blob. */
+        . = ALIGN(4096);
+        _kernel_end = .;
     }
 
     /DISCARD/ : {

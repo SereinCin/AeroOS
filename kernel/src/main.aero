@@ -1,17 +1,19 @@
 // AeroOS 26R1 — riscv64 kernel entry point.
 //
 // Boot assembly (start.S) has set the stack, cleared BSS and installed
-// the S-mode trap vector.  Timer interrupts are exercised via the
-// clint.c self-test before we hand back to the wfi halt loop.
+// the S-mode trap vector.  The timer and physical-frame-allocator
+// self-tests run before we hand back to the wfi halt loop.
 
 extern "C" fn aeroos_uart_puts(msg: str);
 extern "C" fn aeroos_timer_demo();
+extern "C" fn aeroos_mm_demo();
 
 #[entry]
 #[no_mangle]
 fn kernel_start() {
     aeroos_uart_puts("AeroOS 26R1 booting...\n");
     aeroos_timer_demo();
+    aeroos_mm_demo();
     aeroos_uart_puts("OK\n");
     // On return, start.S halts the CPU (wfi loop).
 }
