@@ -22,6 +22,10 @@ _start:
     j       .bss_loop
 .bss_done:
 
+    # --- Trap vector (S-mode, direct mode) ---
+    la      t0, trap_handler
+    csrw    stvec, t0
+
     # --- Kernel entry ---
     call    kernel_start
 

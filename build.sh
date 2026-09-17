@@ -4,7 +4,7 @@ cd '/mnt/e/Projects/AeroProjects/Aero OS Version/AeroOS 26R1'
 rm -rf build kernel/src/main.o
 mkdir -p build
 
-CFLAGS='--target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -nostdlib -ffreestanding -ffunction-sections -fdata-sections'
+CFLAGS='--target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -ffreestanding -ffunction-sections -fdata-sections'
 OBJS='build/boot.o build/trap.o build/uart.o build/clint.o build/kernel.o build/libc_stub.o build/libgcc_stub.o'
 
 echo '=== 1. boot.S + trap.S ==='
@@ -15,8 +15,8 @@ echo '=== 2. uart.c ==='
 clang $CFLAGS -c kernel/src/driver/riscv64/uart.c -o build/uart.o
 
 echo '=== 3. stubs ==='
-clang --target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -nostdlib -ffreestanding -c kernel/src/driver/riscv64/libc_stub.c -o build/libc_stub.o
-clang --target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -nostdlib -ffreestanding -c kernel/src/driver/riscv64/libgcc_stub.c -o build/libgcc_stub.o
+clang --target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -ffreestanding -c kernel/src/driver/riscv64/libc_stub.c -o build/libc_stub.o
+clang --target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -ffreestanding -c kernel/src/driver/riscv64/libgcc_stub.c -o build/libgcc_stub.o
 
 echo '=== 3b. clint.c ==='
 clang $CFLAGS -c kernel/src/driver/riscv64/clint.c -o build/clint.o

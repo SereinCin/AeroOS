@@ -1,94 +1,116 @@
-// CLINT driver for RISC-V QEMU virt (S-mode)
+// Timer driver for AeroOS riscv64 (S-mode), QEMU virt.
 //
-// MMIO map (verified QEMU virt):
-//   mtimecmp base: 0x02004000  (per-hart: + hart_id * 8)
-//   mtime:         0x0200BFF8  (shared, 64-bit monotonic counter)
+// OpenSBI runs in M-mode and owns the CLINT.  From S-mode we must NOT
+// touch the CLINT MMIO directly: mtimecmp at 0x02004000 is M-mode only,
+// and an S-mode load there raises scause=0x05 (load access fault).
 //
-// S-mode interrupt enable bits:
-//   mstatus.SIE  = 1  (global interrupt enable)
-//   sie.STIE     = 1  (supervisor timer interrupt enable)
+// Instead the timer is programmed through the legacy SBI call:
+//     EID=0 (Set Timer), a0 = ABSOLUTE stime (64-bit)
+// and the current counter is read from the S-mode `time` CSR (0xC01).
 
 #include <stdint.h>
 
-#define CLINT_MTIMECMP_BASE 0x02004000ULL
-#define CLINT_MTIME         0x0200BFF8ULL
+extern void aeroos_uart_puts(const char *msg);
+extern void aeroos_uart_putc(char c);
 
-static volatile uint64_t *mtimecmp_for(int hart) {
-    return (volatile uint64_t *)(CLINT_MTIMECMP_BASE + (uint64_t)hart * 8);
+// 10 MHz timebase on QEMU virt -> 2_000_000 cycles = 0.2 s.
+// Must stay in sync with the interval in trap.S.
+#define TIMER_INTERVAL 2000000ULL
+#define TIMER_TICK_TARGET 5ULL
+
+// Incremented by trap.S on every supervisor timer interrupt.
+// Referenced from assembly (`.extern timer_ticks`), so keep it non-static.
+volatile uint64_t timer_ticks = 0;
+
+static inline uint64_t rdtime(void) {
+    uint64_t v;
+    __asm__ volatile("rdtime %0" : "=r"(v));
+    return v;
 }
 
-static volatile uint64_t *mtime_reg(void) {
-    return (volatile uint64_t *)CLINT_MTIME;
+// Legacy SBI: EID=0, a0 = absolute stime.  `.word 0x00000073` is used
+// instead of `ecall` to avoid clang integrated-as mangling it.
+static inline void sbi_set_timer(uint64_t stime) {
+    register uint64_t a0 __asm__("a0") = stime;
+    register uint64_t a7 __asm__("a7") = 0;
+    __asm__ volatile(".word 0x00000073" :: "r"(a0), "r"(a7) : "memory");
 }
 
-// Read current cycle count
 uint64_t clint_mtime_read(void) {
-    return *mtime_reg();
+    return rdtime();
 }
 
-// Set compare value for hart 0 (single-hart kernel for now)
-void clint_mtimecmp_set(uint64_t value) {
-    *mtimecmp_for(0) = value;
+int64_t clint_timer_ticks_read(void) {
+    return (int64_t)timer_ticks;
 }
 
-// Arm timer to fire in `interval_cycles` cycles from now
-void clint_timer_arm(uint64_t interval_cycles) {
-    clint_mtimecmp_set(clint_mtime_read() + interval_cycles);
+// Arm the next timer interrupt `interval` cycles from now.
+void timer_arm(uint64_t interval) {
+    sbi_set_timer(rdtime() + interval);
 }
 
-// S-mode interrupt enable register (sie)
-#define SIE_STIE  (1ULL << 5)   // Supervisor Timer Interrupt Enable
-#define SIE_SSIE  (1ULL << 1)   // Supervisor Software Interrupt Enable
+// Enable supervisor timer interrupts: sie.STIE + sstatus.SIE.
+// NOTE: mstatus is an M-mode CSR; S-mode must use sstatus here.
+void timer_enable(void) {
+    uint64_t s;
 
-static inline uint64_t csr_read_sie(void) {
-    uint64_t v;
-    __asm__ volatile("csrr %0, sie" : "=r"(v));
-    return v;
+    __asm__ volatile("csrr %0, sie" : "=r"(s));
+    s |= (1ULL << 5);                       // STIE
+    __asm__ volatile("csrw sie, %0" :: "r"(s));
+
+    __asm__ volatile("csrr %0, sstatus" : "=r"(s));
+    s |= (1ULL << 1);                       // SIE
+    __asm__ volatile("csrw sstatus, %0" :: "r"(s));
 }
 
-static inline void csr_write_sie(uint64_t v) {
-    __asm__ volatile("csrw sie, %0" :: "r"(v));
+void timer_disable(void) {
+    uint64_t s;
+
+    __asm__ volatile("csrr %0, sie" : "=r"(s));
+    s &= ~(1ULL << 5);
+    __asm__ volatile("csrw sie, %0" :: "r"(s));
+
+    __asm__ volatile("csrr %0, sstatus" : "=r"(s));
+    s &= ~(1ULL << 1);
+    __asm__ volatile("csrw sstatus, %0" :: "r"(s));
 }
 
-static inline uint64_t csr_read_mstatus(void) {
-    uint64_t v;
-    __asm__ volatile("csrr %0, mstatus" : "=r"(v));
-    return v;
-}
+static void uart_put_u64(uint64_t v) {
+    char buf[20];
+    int i = 0;
 
-static inline void csr_write_mstatus(uint64_t v) {
-    __asm__ volatile("csrw mstatus, %0" :: "r"(v));
-}
-
-// Supervisor Interrupt Enable bit in mstatus
-#define MSTATUS_SIE  (1ULL << 1)
-
-// Enable S-mode timer interrupts (global + per-type)
-void clint_timer_enable(void) {
-    csr_write_sie(csr_read_sie() | SIE_STIE);
-    csr_write_mstatus(csr_read_mstatus() | MSTATUS_SIE);
-}
-
-// Disable S-mode timer interrupts
-void clint_timer_disable(void) {
-    csr_write_mstatus(csr_read_mstatus() & ~MSTATUS_SIE);
-}
-
-// Simple busy-wait for `cycles` (used for early boot before interrupts)
-void clint_delay_cycles(uint64_t cycles) {
-    uint64_t start = clint_mtime_read();
-    while ((clint_mtime_read() - start) < cycles) {
-        __asm__ volatile("" ::: "memory");
+    if (v == 0) {
+        aeroos_uart_putc('0');
+        return;
+    }
+    while (v > 0) {
+        buf[i++] = (char)('0' + (v % 10));
+        v /= 10;
+    }
+    while (i > 0) {
+        aeroos_uart_putc(buf[--i]);
     }
 }
 
-// ---- timer_ticks access (trap.S declares .global timer_ticks) ----
+// Boot-time self-test: prove an S-mode timer interrupt is taken and that
+// the trap handler increments timer_ticks.
+void aeroos_timer_demo(void) {
+    uint64_t last = 0;
 
-uint64_t timer_ticks = 0;  // incremented by trap.S asm handler
+    aeroos_uart_puts("timer: arming S-mode timer interrupt\n");
+    timer_arm(TIMER_INTERVAL);
+    timer_enable();
 
-int64_t clint_timer_ticks_read(void) {
-    int64_t v;
-    // asm forces PC-relative addressing (not absolute HI20)
-    __asm__ volatile("ld %0, timer_ticks" : "=r"(v));
-    return v;
+    while (timer_ticks < TIMER_TICK_TARGET) {
+        uint64_t now = timer_ticks;
+        if (now != last) {
+            last = now;
+            aeroos_uart_puts("tick ");
+            uart_put_u64(now);
+            aeroos_uart_puts("\n");
+        }
+    }
+
+    timer_disable();
+    aeroos_uart_puts("timer: 5 ticks received\n");
 }
