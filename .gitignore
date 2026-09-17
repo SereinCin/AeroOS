@@ -9,6 +9,9 @@ build/
 # Aero cache
 .aero-cache/
 
+# Rust toolchain (aero-ld)
+tools/aero-ld/target/
+
 # OS
 .DS_Store
 Thumbs.db
