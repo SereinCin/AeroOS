@@ -101,7 +101,10 @@ void aeroos_timer_demo(void) {
     timer_arm(TIMER_INTERVAL);
     timer_enable();
 
-    while (timer_ticks < TIMER_TICK_TARGET) {
+    // Loop on `last`, not on `timer_ticks`: reading the volatile counter in
+    // the condition races with the 5th interrupt, so the final "tick 5" line
+    // could be skipped when the count hits the target mid-iteration.
+    while (last < TIMER_TICK_TARGET) {
         uint64_t now = timer_ticks;
         if (now != last) {
             last = now;
