@@ -1,10 +1,10 @@
 # AeroOS 26R1 — RISC-V S-mode Trap Handler
 #
-# Full 29-register context frame for preemptive scheduling:
+# Full 30-register context frame for preemptive scheduling + U-mode ecall:
 #   sp+0   = ra           sp+128 = s0          sp+224 = sepc
-#   sp+8   = t0           sp+136 = s1
-#   sp+16  = t1           sp+144 = s2           Frame size = 232 bytes
-#   sp+24  = t2           sp+152 = s3           (29 regs × 8)
+#   sp+8   = t0           sp+136 = s1          sp+232 = sstatus  ← NEW
+#   sp+16  = t1           sp+144 = s2          Frame size = 240 bytes
+#   sp+24  = t2           sp+152 = s3          (30 regs × 8)
 #   sp+32  = t3           sp+160 = s4
 #   sp+40  = t4           sp+168 = s5
 #   sp+48  = t5           sp+176 = s6
@@ -18,19 +18,18 @@
 #   sp+112 = a6
 #   sp+120 = a7
 #
-# On each trap we push this frame.  Timer interrupts additionally save the
-# task's old sp into the scheduler, round-robin to the next runnable, then
-# pop that next task's frame and sret into it.
+# sepc (frame[28])  : trap return PC; ecall path adds 4 before writing back
+# sstatus (frame[29]): saved SPP/SPIE; controls whether sret lands in U or S
 
 .section .text.trap, "ax"
 .global trap_handler
 .type trap_handler, @function
 .align 2
 
-.equ CTX_SIZE, 232
+.equ CTX_SIZE, 240
 
 trap_handler:
-    # ---- push full context frame (232 B) ----
+    # ---- push full context frame (240 B) ----
     addi    sp, sp, -CTX_SIZE
     sd      ra,    0(sp)
     sd      t0,    8(sp)
@@ -62,6 +61,8 @@ trap_handler:
     sd      s11, 216(sp)
     csrr    t0, sepc
     sd      t0,  224(sp)
+    csrr    t0, sstatus
+    sd      t0,  232(sp)
 
     # Read trap info
     csrr    t0, scause
@@ -71,48 +72,49 @@ trap_handler:
     srai    t2, t0, 63
     beqz    t2, trap_exception
 
+    # ---------------------------------------------------------------
     # Interrupt — supervisor timer interrupt = code 5
+    # ---------------------------------------------------------------
     andi    t2, t0, 0x3FF
     li      t3, 5
     bne     t2, t3, trap_unexpected
 
-    # ================================================================
-    # Timer interrupt path
-    # ================================================================
-
-    # 1. Re-arm timer via legacy SBI (absolute stime from S-mode `time` CSR)
+    # 1. Re-arm timer via legacy SBI
     rdtime  a0
     li      a1, 2000000          # 0.2 s @ 10 MHz timebase
     add     a0, a0, a1
     li      a7, 0                # legacy SBI EID=0 (Set Timer)
     .word   0x00000073           # ecall
 
-    # 2. Increment the boot/demo counter (kept for evidence)
+    # 2. Increment boot/demo counter
     la      t0, timer_ticks
     ld      t1, 0(t0)
     addi    t1, t1, 1
     sd      t1, 0(t0)
 
     # 3. Save this task's frame BOTTOM (= sp after push) into scheduler.
-    #    scheduler_tick() will advance to the next task and return ITS frame
-    #    bottom; trap_return then pops that whole frame via sp+0..sp+224.
     la      t1, current_task
     ld      t2, 0(t1)
     beqz    t2, skip_reschedule  # scheduler not yet started (timer demo phase)
-    sd      sp, 0(t2)            # current_task->saved_sp = frame bottom (= sp)
+    sd      sp, 0(t2)            # current_task->saved_sp = frame bottom
 
-    # 4. Round-robin to next task; a0 comes back as its saved sp
+    # 4. Round-robin to next task
     call    scheduler_tick
 
-    # 5. Switch sp to the next task's saved sp (bottom of its frame)
+    # 5. Switch sp to the next task's saved sp
     mv      sp, a0
 
 skip_reschedule:
     j       trap_return
 
 trap_exception:
+    # Check: supervisor env call from U-mode (scause code 8)
+    andi    t2, t0, 0x3FF
+    li      t3, 8
+    beq     t2, t3, trap_ecall
+
 trap_unexpected:
-    # Debug dump: scause + sepc + stval as hex, then halt
+    # Debug dump
     li      t3, 0x10000000       # UART0 THR
     li      t4, '\n'
     sb      t4, 0(t3)
@@ -178,7 +180,6 @@ trap_halt:
     j       trap_halt
 
 print_hex64:
-    # Print a1 as 16 hex digits. Clobbers a1, t3, t4, t5, t6.
     li      t3, 0x10000000
     li      t6, 60
 5:  srl     t5, a1, t6
@@ -193,8 +194,84 @@ print_hex64:
     bgez    t6, 5b
     ret
 
+# -----------------------------------------------------------------------
+# ECALL from U-mode (scause code 8)
+#   a7 = syscall number, a0/a1 = args
+#   We modify a0 (return value) and increment sepc by 4 to skip ecall.
+# -----------------------------------------------------------------------
+trap_ecall:
+    # sepc += 4 (skip the ecall instruction we just executed)
+    ld      t0, 224(sp)
+    addi    t0, t0, 4
+    sd      t0, 224(sp)
+
+    # Dispatch by a7
+    ld      a7, 120(sp)
+    li      t0, 1                              # SYS_write
+    beq     a7, t0, ecall_write
+    li      t0, 2                              # SYS_yield
+    beq     a7, t0, ecall_yield
+    li      t0, 3                              # SYS_fork
+    beq     a7, t0, ecall_fork
+    li      t0, 4                              # SYS_exit
+    beq     a7, t0, ecall_exit
+    # Unknown syscall — return -1
+    li      a0, -1
+    sd      a0, 64(sp)
+    j       ecall_return
+
+ecall_write:
+    # a0 = str ptr, a1 = len  (already in a0/a1 from frame[8]/frame[9])
+    ld      a0, 64(sp)                         # a0 = str
+    ld      a1, 72(sp)                         # a1 = len
+    call    aeroos_sys_write
+    sd      a0, 64(sp)                         # return value back into a0 slot
+    j       ecall_return
+
+ecall_yield:
+    call    scheduler_advance
+    # Return 0
+    li      a0, 0
+    sd      a0, 64(sp)
+    # Trigger a timer interrupt immediately — set timer to "now + small"
+    rdtime  a0
+    li      a1, 50000
+    add     a0, a0, a1
+    li      a7, 0
+    .word   0x00000073
+    j       ecall_return
+
+ecall_fork:
+    # a0 = entry function ptr
+    ld      a0, 64(sp)
+    call    aeroos_sys_fork
+    sd      a0, 64(sp)                         # return slot index (>=0) or -1
+    j       ecall_return
+
+ecall_exit:
+    # U-mode task is done — just hang it here (set saved_sp = 0 so scheduler skips it later)
+    # For MVP we simply spin; the task will still be round-robin'd into but does nothing.
+    j       ecall_exit_loop
+ecall_exit_loop:
+    # Re-arm timer to keep other tasks alive, then wait
+    rdtime  a0
+    li      a1, 2000000
+    add     a0, a0, a1
+    li      a7, 0
+    .word   0x00000073
+    # Then do wfi loop — but we're still in S-mode here. Just busy loop.
+    j       ecall_exit_loop
+
+ecall_return:
+    j       trap_return
+
 trap_return:
-    # Restore full context frame (232 B), then sret
+    # Restore sstatus first (so SPP is set correctly for sret), then sepc.
+    ld      t0, 232(sp)
+    csrw    sstatus, t0
+    ld      t0, 224(sp)
+    csrw    sepc, t0
+    # Restore all GPRs
     ld      ra,    0(sp)
     ld      t0,    8(sp)
     ld      t1,   16(sp)
@@ -223,8 +300,6 @@ trap_return:
     ld      s9,  200(sp)
     ld      s10, 208(sp)
     ld      s11, 216(sp)
-    ld      t0,  224(sp)
-    csrw    sepc, t0
     addi    sp, sp, CTX_SIZE
     sret
 
@@ -233,3 +308,6 @@ trap_return:
 .extern timer_ticks
 .extern current_task
 .extern scheduler_tick
+.extern scheduler_advance
+.extern aeroos_sys_write
+.extern aeroos_sys_fork
