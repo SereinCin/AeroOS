@@ -1,14 +1,14 @@
 // AeroOS 26R1 — riscv64 kernel entry point.
 //
 // Boot assembly (start.S) has set the stack, cleared BSS and installed
-// the S-mode trap vector.  We bring up subsystems in order, then hand
+// the S-mode trap vector.  We bring subsystems up in order, then hand
 // the CPU over to the scheduler by calling worker_0() — kernel_start
-// never returns; worker_0 IS task[0].  The first timer trap captures
-// worker_0's running context as task[0].saved_sp and switches to task[1].
+// never returns; worker_0 IS task[0].
 
 extern "C" fn aeroos_uart_puts(msg: str);
 extern "C" fn aeroos_timer_demo();
 extern "C" fn aeroos_mm_demo();
+extern "C" fn aeroos_heap_demo();
 extern "C" fn scheduler_demo();
 extern "C" fn timer_enable();
 extern "C" fn worker_0();
@@ -18,24 +18,22 @@ extern "C" fn worker_0();
 fn kernel_start() {
     aeroos_uart_puts("AeroOS 26R1 booting...\n");
 
-    // 1. Timer trap self-test — exercises the 29-reg context frame while
-    //    current_task is NULL (scheduler not yet active; trap.S skips the
-    //    reschedule branch).
+    // 1. Timer trap self-test (29-reg frame, scheduler not yet active).
     aeroos_timer_demo();
 
-    // 2. Physical memory allocator — scheduler_create depends on it.
+    // 2. Physical page-frame allocator — heap depends on it.
     aeroos_mm_demo();
 
-    // 3. Build task table (task[0]=worker_0, task[1]=worker_1, task[2]=worker_2)
-    //    and arm current_task = &tasks[0].
+    // 3. Kernel heap (kmalloc / kfree).  Proves libc_stub's delegate chain.
+    aeroos_heap_demo();
+
+    // 4. Task table: t0..t2 via scheduler_create, t3 via aeroos_fork().
     scheduler_demo();
 
-    // 4. Enable timer interrupts.  First tick saves worker_0's context
-    //    and round-robins into task[1].
+    // 5. Enable timer interrupts.  First tick captures worker_0's context
+    //    as task[0] and round-robins to task[1].
     timer_enable();
 
-    // 5. Enter task[0] (worker_0).  This function never returns — the
-    //    scheduler switches us away on every timer interrupt and brings
-    //    us back into this same loop.
+    // 6. Enter task[0]; scheduler pre-empts us on every quantum.
     worker_0();
 }
