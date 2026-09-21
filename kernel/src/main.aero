@@ -12,28 +12,19 @@ extern "C" fn aeroos_heap_demo();
 extern "C" fn scheduler_demo();
 extern "C" fn timer_enable();
 extern "C" fn worker_0();
+extern "C" fn aeroos_wait_timer_ticks(n: i64);
 
 #[entry]
 #[no_mangle]
 fn kernel_start() {
     aeroos_uart_puts("AeroOS 26R1 booting...\n");
 
-    // 1. Timer trap self-test (29-reg frame, scheduler not yet active).
     aeroos_timer_demo();
-
-    // 2. Physical page-frame allocator — heap depends on it.
     aeroos_mm_demo();
-
-    // 3. Kernel heap (kmalloc / kfree).  Proves libc_stub's delegate chain.
     aeroos_heap_demo();
 
-    // 4. Task table: t0..t2 via scheduler_create, t3 via aeroos_fork().
     scheduler_demo();
-
-    // 5. Enable timer interrupts.  First tick captures worker_0's context
-    //    as task[0] and round-robins to task[1].
     timer_enable();
 
-    // 6. Enter task[0]; scheduler pre-empts us on every quantum.
     worker_0();
 }

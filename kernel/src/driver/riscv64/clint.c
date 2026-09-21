@@ -44,16 +44,30 @@ int64_t clint_timer_ticks_read(void) {
     return (int64_t)timer_ticks;
 }
 
+int64_t aeroos_get_timer_ticks(void) {
+    return (int64_t)timer_ticks;
+}
+
+// C helper: enable timer interrupts then wait for at least N ticks.
+// Useful from Aero where loop/if/!= syntax is limited.
+void aeroos_wait_timer_ticks(int64_t n) {
+    int64_t start = (int64_t)timer_ticks;
+    while ((int64_t)timer_ticks < start + n) {
+        // busy wait — timer interrupt will increment timer_ticks
+    }
+}
+
 // Arm the next timer interrupt `interval` cycles from now.
 void timer_arm(uint64_t interval) {
     sbi_set_timer(rdtime() + interval);
 }
 
-// Enable supervisor timer interrupts: sie.STIE + sstatus.SIE.
-// NOTE: mstatus is an M-mode CSR; S-mode must use sstatus here.
+// Enable supervisor timer interrupts: arm the timer AND enable bits.
+// Without arming there's no future trigger, even if STIE+SIE are both set.
 void timer_enable(void) {
-    uint64_t s;
+    timer_arm(TIMER_INTERVAL);
 
+    uint64_t s;
     __asm__ volatile("csrr %0, sie" : "=r"(s));
     s |= (1ULL << 5);                       // STIE
     __asm__ volatile("csrw sie, %0" :: "r"(s));

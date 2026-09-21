@@ -1,0 +1,21 @@
+// Aero 1.2 userapp — U-mode program using Aero-written syscall wrappers.
+//
+// First userland program written in Aero.  Compiled by aero.exe to a
+// riscv64 .o, linked into the kernel image alongside main.aero, then
+// forked as a U-mode task via scheduler_create2(userapp_main, 1).
+//
+// Syscall flow: Aero code → call sys_write() / sys_yield() (asm shim in
+// syscall_shim.S) → shim sets a7 + ecall → trap.S trap_ecall (scause=8)
+// → C backend in api.c (write) or asm handler in trap.S (yield) →
+// trap_return → sret back to U-mode.
+
+extern "C" fn sys_write(s: str, n: i64) -> i64;
+extern "C" fn sys_yield();
+
+#[no_mangle]
+fn userapp_main() {
+    loop {
+        sys_write("hello from Aero\n", 16);
+        sys_yield();
+    }
+}

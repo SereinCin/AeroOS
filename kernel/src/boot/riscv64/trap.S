@@ -86,7 +86,7 @@ trap_handler:
     li      a7, 0                # legacy SBI EID=0 (Set Timer)
     .word   0x00000073           # ecall
 
-    # 2. Increment boot/demo counter
+    # 2. Increment tick counter (for debug/statistics only)
     la      t0, timer_ticks
     ld      t1, 0(t0)
     addi    t1, t1, 1
@@ -95,7 +95,7 @@ trap_handler:
     # 3. Save this task's frame BOTTOM (= sp after push) into scheduler.
     la      t1, current_task
     ld      t2, 0(t1)
-    beqz    t2, skip_reschedule  # scheduler not yet started (timer demo phase)
+    beqz    t2, skip_reschedule  # scheduler not yet started
     sd      sp, 0(t2)            # current_task->saved_sp = frame bottom
 
     # 4. Round-robin to next task
@@ -267,7 +267,11 @@ ecall_return:
 
 trap_return:
     # Restore sstatus first (so SPP is set correctly for sret), then sepc.
+    # FORCE SPIE=1: hardware trap entry always clears SPIE (moves old SIE
+    # into it, then zeros SPIE to prevent re-entrant traps).  If we blindly
+    # restore it, sret sets SIE=SPIE=0 and interrupts are OFF forever.
     ld      t0, 232(sp)
+    ori     t0, t0, 0x20            # SPIE (bit 5) = 1
     csrw    sstatus, t0
     ld      t0, 224(sp)
     csrw    sepc, t0

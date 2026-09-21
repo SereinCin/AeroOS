@@ -5,7 +5,7 @@ rm -rf build kernel/src/main.o
 mkdir -p build
 
 CFLAGS='--target=riscv64-unknown-elf -march=rv64gc -mabi=lp64 -mcmodel=medany -nostdlib -ffreestanding -ffunction-sections -fdata-sections'
-OBJS='build/boot.o build/trap.o build/uart.o build/clint.o build/phys.o build/heap.o build/userapp.o build/sched.o build/api.o build/kernel.o build/libc_stub.o build/libgcc_stub.o'
+OBJS='build/boot.o build/trap.o build/uart.o build/clint.o build/phys.o build/heap.o build/syscall_shim.o build/userapp.o build/sched.o build/api.o build/kernel.o build/libc_stub.o build/libgcc_stub.o'
 
 echo '=== 1. boot.S + trap.S ==='
 clang $CFLAGS -c kernel/src/boot/riscv64/start.S -o build/boot.o
@@ -27,8 +27,12 @@ clang $CFLAGS -c kernel/src/mm/phys.c -o build/phys.o
 echo '=== 3c2. mm/heap.c ==='
 clang $CFLAGS -c kernel/src/mm/heap.c -o build/heap.o
 
-echo '=== 3c3. userapp.c ==='
-clang $CFLAGS -c kernel/src/userapp.c -o build/userapp.o
+echo '=== 3c2b. syscall_shim.S ==='
+clang $CFLAGS -c kernel/src/syscall_shim.S -o build/syscall_shim.o
+
+echo '=== 3c3. userapp.aero (Aero compiler) ==='
+'/mnt/e/Projects/AeroProjects/Aero Lang Version/Aero 1.2.1---1.2.4/compiler/target/release/aero.exe' build kernel/src/userapp.aero --emit-obj --target riscv64-unknown-none
+mv kernel/src/userapp.o build/userapp.o
 
 echo '=== 3d. sched.c + api.c ==='
 clang $CFLAGS -c kernel/src/sched.c -o build/sched.o
@@ -39,8 +43,12 @@ echo '=== 4. Aero main.aero ==='
 mv kernel/src/main.o build/kernel.o
 
 echo '=== 5. aero-ld (self-hosted RISC-V linker) ==='
-cargo build --release --manifest-path tools/aero-ld/Cargo.toml
-tools/aero-ld/target/release/aero-ld -T target/riscv64-qemu-virt/linker.ld -o build/AeroOS.elf $OBJS
+export PATH="/root/.cargo/bin:$PATH"
+AERO_LD='tools/aero-ld/target/release/aero-ld'
+if [ ! -x "$AERO_LD" ]; then
+    cargo build --release --manifest-path tools/aero-ld/Cargo.toml
+fi
+"$AERO_LD" -T target/riscv64-qemu-virt/linker.ld -o build/AeroOS.elf $OBJS
 
 echo '=== BUILD OK ==='
 ls -la build/AeroOS.elf
