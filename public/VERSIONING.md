@@ -1,139 +1,139 @@
-# Versioning — AeroOS 版本命名规范
+> **[中文版本 →](zh-CN/VERSIONING.md)**
 
-> v1.1 · 团队内部规范，对外发布时作为版本标识
+# Versioning — AeroOS Naming Convention v1.1
+
+Team-internal specification. Applied to all release names, file names, URL paths, package identifiers, and patch numbering.
 
 ---
 
-## 核心原则
+## Core principles
 
-- **26 出生线**（26R1, 26R2...）vs **27+ 进化线**（27H1, 27H1 PRO...），**两条线并行，不是替代关系**
-- 26 线偏稳定，27+ 线偏进化
-- 26 没有 PRO，27 有 PRO
-- PRO 后缀仅 27+ 线可用
-- T 补丁 = OS 代码层面的漏洞修复 / 功能更新，**不用于硬件相关**（硬件归类 EVT 工程样机测试）
+- **Two parallel lineages, not sequential.** The **26-line** (birth / stable) and **27+ line** (evolution / generation) run side-by-side. `AeroOS 26R10` and `AeroOS 27H1` are not comparable by any simple "which is newer" rule.
+- 26-line has **no PRO** variant. 27+ line **has PRO**.
+- T-patches apply only to **OS-level code changes** (bug fixes, feature updates, kernel behavior). Hardware-related work is **not** a T-patch — it is EVT (Engineering Verification Test).
+- Birth year = release line anchor. 26 = 2026, 27 = 2027, etc.
 
-## 版本名结构
-
-### 26 线
+## 26-line — Birth / stable
 
 ```
 AeroOS 26R1
 │      │  │
-│      │  └── R1 = 26 线第 1 个 Release
-│      └───── 26 = 出生年 2026
-└──────────── AeroOS = 系统名
+│      │  └── R1 = 1st Release of the 26-line
+│      └───── 26 = birth year 2026 (fixed, never changes)
+└──────────── AeroOS = system name
 ```
 
-支持长期/短期支持后缀：
+Support suffixes (add to the above):
 
 ```
-AeroOS 26R1 LTS    5 年长期支持
-AeroOS 26R1 STS    2 年短期支持
+AeroOS 26R1 LTS    5-year long-term support
+AeroOS 26R1 STS    2-year short-term support
 ```
 
-### 27+ 线
+Serial rule: `R1 → R2 → R3 → ...` Long-term serial, no reset.
+
+## 27+ line — Evolution / generation
 
 ```
 AeroOS 27H1
 │      │  │
-│      │  └── H1 = 2027 上半年（H2 = 下半年）
-│      └───── 27 = 2027 世代
-└──────────── AeroOS = 系统名
+│      │  └── H1 = first half of 2027 (H2 = second half)
+│      └───── 27 = generation year 2027
+└──────────── AeroOS = system name
 ```
 
-带 PRO：
+PRO suffix:
+```
+AeroOS 27H1 PRO     2027 H1 professional edition
+AeroOS 27H2 PRO     2027 H2 professional edition
+```
+
+H1/H2 per-generation cadence — still TBD whether 28+ continues this.
+
+## Complete naming inventory
 
 ```
-AeroOS 27H1 PRO    2027 上半年 专业版
-AeroOS 27H2 PRO    2027 下半年 专业版
-```
-
-**28 线之后是否继续 H1/H2？27 完了再说。**
-
-## 展示名 vs 技术名 vs 文件名
-
-| 类型 | 规则 | 示例 |
-|------|------|------|
-| 展示名 | 可空格、可大写、可读 | `AeroOS 26R1 LTS` |
-| 技术名 | 全小写 + 横线 | `aeroos-26r1-lts` |
-| 文件名 | 技术名 + 后缀 | `aeroos-26r1-riscv64-qemu.zip` |
-| URL | 技术名 | `https://aeroos.dev/releases/aeroos-26r1/` |
-
-**规则**：展示名用于 README、官网、文档标题；技术名用于文件名、目录名、URL、包管理。
-
-## 完整命名总表
-
-```
-26 线（出生/稳定）:
-  AeroOS 26R1          ← 当前 Release
+26-line (birth / stable):
+  AeroOS 26R1              ← current Release
   AeroOS 26R2
   AeroOS 26R3
-  AeroOS 26R1 LTS      (5 years)
-  AeroOS 26R1 STS      (2 years)
-  T-26R1 00000         ← 补丁（OS 代码层面）
+  AeroOS 26R1 LTS          (5 years)
+  AeroOS 26R1 STS          (2 years)
+  T-26R1 00000             ← T-patch
 
-27 线（进化/世代）:
+27-line (evolution / generation):
   AeroOS 27H1
   AeroOS 27H2
   AeroOS 27H1 PRO
   AeroOS 27H2 PRO
-  T-27H1 00000         ← 补丁
+  T-27H1 00000
 
-28+ 线:
+28+ line:
   AeroOS 28H1 / H2 / PRO
-  （28 线是否继续 H1/H2 待定）
+  (whether H1/H2 continues after 27 is TBD)
 ```
 
-## T 补丁规范
+## Display name vs technical name vs file name
 
-T 补丁**只作用于 OS 本身**：代码漏洞修复、OS 层面的功能更新、内核行为变更。
+| Type | Rule | Example |
+|---|---|---|
+| Display name | Allows spaces, mixed case, readable | `AeroOS 26R1 LTS` |
+| Technical name | All lowercase + hyphens | `aeroos-26r1-lts` |
+| File name | Technical name + suffix | `aeroos-26r1-riscv64-qemu.zip` |
+| URL path | Technical name | `https://aeroos.dev/releases/aeroos-26r1/` |
 
-**不属于 T 补丁**：
-- 硬件相关（真机点亮、新板级移植）→ EVT 工程样机测试
-- 用户程序更新 / 外部工具更新
-- 文档 / 配置变更（除非影响 OS 行为）
+**Hard rule**: technical names drive file names and URLs. Display names are for READMEs, docs, and end-user-facing UI only.
 
-### T 补丁编号
+## T-patch specification
+
+### What qualifies as a T-patch
+
+A T-patch applies **only** to OS-level changes:
+- Code bug fixes (kernel panic, scheduler deadlock, syscall ABI break, etc.)
+- Feature additions to the OS itself (new syscalls, new scheduler policies, PMP support, etc.)
+- Kernel behavior changes
+
+### What does NOT qualify
+
+- **Hardware bring-up** (new board support, SD card boot, EVT prototype testing) → this is EVT, not T-patch
+- **User program updates** (new demo app, better README example)
+- **Build system refactors** (unless they change the resulting kernel binary)
+- **Documentation-only changes**
+
+### Numbering
 
 ```
-展示名: T-26R1 00000
-技术名: T-26R1-00000
-文件名: aeroos-26r1-patch-T-26R1-00000.zip
+Display: T-26R1 00000
+Tech   : T-26R1-00000
+File   : aeroos-26r1-patch-T-26R1-00000.zip
 ```
 
-| 部分 | 含义 |
-|------|------|
-| T | 补丁包标识 |
-| 26 / 27 | 年份后两位 |
-| R1 / H1 | 版本段 |
-| 00000 | 5 位序号，从 00000 开始 |
+| Part | Meaning |
+|---|---|
+| T | Patch marker |
+| 26 / 27 | Year (last two digits) |
+| R1 / H1 | Release segment |
+| 00000 | 5-digit serial, starts at 00000 |
 
-### 27 线
-
+27-line:
 ```
-展示名: T-27H1 00000
-技术名: T-27H1-00000
+Display: T-27H1 00000
+Tech   : T-27H1-00000
+File   : aeroos-27h1-patch-T-27H1-00000.zip
 ```
 
-## 发布周期
+## 26R1 alignment check
 
-| 线 | 周期 | 26R1 LTS | 26R1 STS |
-|----|------|----------|----------|
-| 26 | 长期稳定线，Release 长期递增 | 5 年支持 | 2 年支持 |
-| 27 | 每半年一个 Release (H1 / H2) | — | — |
-
-## 本仓库 26R1 对齐
-
-| 项 | 实际值 | 对齐状态 |
-|----|--------|---------|
-| 展示名 | `AeroOS 26R1` | ✅ |
-| 技术名 | `aeroos-26r1` | ✅ zip / 目录 / URL 全部 |
-| 内核镜像 | `AeroOS-26R1-riscv64.elf` / `.bin` | ✅ |
-| Aero.toml version | `26R1` | ✅ |
-| LTS / STS | 未打 | 26R1 没有 LTS/STS 后缀（可选） |
-| T 补丁 | 未发布 | 等首个 OS 层面的修复/更新出现 |
+| Item | Actual value | Aligned? |
+|---|---|---|
+| Display name | `AeroOS 26R1` | ✅ |
+| Technical name | `aeroos-26r1` | ✅ (zip, directory, URL) |
+| Kernel image | `AeroOS-26R1-riscv64.elf` / `.bin` | ✅ |
+| Aero.toml version | `"26R1"` | ✅ |
+| LTS / STS suffix | Not applied | OK — optional suffix |
+| T-patch | Not yet published | Wait for first OS-level fix |
+| EVT status | Real hardware = DEFERRED | ✅ Correctly not labeled as T-patch |
 
 ---
 
-> 版本命名规范 v1.1 · 团队内部定稿
-> 适用：所有 AeroOS 26R 系列和 27+ 系列 Release、补丁、包名、URL
+> Versioning spec v1.1 · Team-internal finalization · Applied to all AeroOS 26R series and 27+ series releases, patches, package names, and URLs

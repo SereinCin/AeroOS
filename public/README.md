@@ -1,59 +1,92 @@
+> **[中文版本 →](zh-CN/README.md)**
+
 # AeroOS 26R1
 
 > Hard real-time OS kernel written from scratch in Aero.
-> RISC-V QEMU virt · 26R 出生线 · Apache-2.0
+> RISC-V QEMU virt · 26R release line · Apache-2.0
 
 ---
 
-## 这是什么
+## What is AeroOS
 
-AeroOS 是一个**硬实时操作系统内核**，设计目标：**端到端中断-线程延迟 ≤ 1µs**（26R 系列 target）。用 [Aero](https://github.com/SereinCin/aero-lang) 语言从头编写——一种专为系统编程设计的语言。
+AeroOS is a **hard real-time operating system kernel**. The goal: **deterministically low interrupt-to-thread latency** (≤1µs target for the 26R series). Written from scratch in [Aero](https://github.com/SereinCin/aero-lang) — a systems programming language designed for exactly this use case.
 
-**26R1 是 AeroOS 的第一个正式 Release**，目标平台是 **RISC-V QEMU virt**。它在 QEMU 上完整运行，包含 preemptive scheduler、timer interrupt、U-mode task + syscall、Aero 语言用户态程序。
+**26R1 is the first official Release** of AeroOS. Target platform: **RISC-V 64-bit QEMU virt**. It boots end-to-end on OpenSBI FW_DYNAMIC, runs a preemptive scheduler, serves U-mode tasks via syscalls, and ships with an Aero-written userland program.
 
-## 你能做什么
+> On hardware availability: EVT (Engineering Verification Test) on real RISC-V boards is **DEFERRED** — see [VERSIONING.md](VERSIONING.md) for why this is not a T-patch. 26R1 is fully gate-passed for the QEMU virt target.
 
-| 你是 | 你可以 |
-|------|--------|
-| 想跑起来试试的开发者 | [QUICKSTART.md](QUICKSTART.md) — 10 分钟在 QEMU 里启动 |
-| 想知道内核怎么工作 | [ARCHITECTURE.md](ARCHITECTURE.md) — 启动链、调度器、上下文切换 |
-| 想在 AeroOS 上写用户态程序 | [WRITING-UMODE-APPS.md](WRITING-UMODE-APPS.md) — 用 Aero 语言写 U-mode 程序 |
-| 想查 API / syscall | [API-REFERENCE.md](API-REFERENCE.md) + [SYSCALLS.md](SYSCALLS.md) |
-| 想移植到真硬件 | [HARDWARE.md](HARDWARE.md) — 地址映射、定时器、外设 |
-| 想知道版本怎么命名 | [VERSIONING.md](VERSIONING.md) |
+## What you can do here
 
-## 核心特性（26R1）
+| If you want to… | Read |
+|---|---|
+| Get it running in 10 minutes | [QUICKSTART.md](QUICKSTART.md) |
+| Understand how the kernel works | [ARCHITECTURE.md](ARCHITECTURE.md) — boot chain, scheduler, context switch |
+| Write a userland program in Aero | [WRITING-UMODE-APPS.md](WRITING-UMODE-APPS.md) |
+| Look up C / Aero API signatures | [API-REFERENCE.md](API-REFERENCE.md) |
+| Reference the syscall table | [SYSCALLS.md](SYSCALLS.md) |
+| Target hardware details (address map, timers) | [HARDWARE.md](HARDWARE.md) |
+| Understand the 26 / 27 / LTS / STS / T-patch naming | [VERSIONING.md](VERSIONING.md) |
+| See what changed | [CHANGELOG.md](CHANGELOG.md) |
 
-- ✅ RISC-V 64-bit QEMU virt 完整启动
-- ✅ OpenSBI 固件对接（FW_DYNAMIC）
-- ✅ NS16550 UART console
-- ✅ Physical page allocator + kmalloc / kfree
-- ✅ Timer interrupt（CLINT via legacy SBI set_timer）
-- ✅ Preemptive round-robin scheduler
-- ✅ 30-register 240-byte context frame
-- ✅ U-mode tasks + ecall syscall dispatch
-- ✅ Aero 语言 U-mode 程序直接链接进内核镜像
+## Core features (26R1)
 
-## 设计原则（永远不违背）
+| Module | Status |
+|---|---|
+| Boot + OpenSBI FW_DYNAMIC handoff | ✅ |
+| NS16550 UART console | ✅ |
+| Physical page allocator | ✅ |
+| `kmalloc` / `kfree` on physical pages | ✅ |
+| CLINT MTIMER via legacy SBI `set_timer` | ✅ |
+| Preemptive round-robin scheduler | ✅ |
+| 30-register 240-byte context frame | ✅ |
+| U-mode tasks + ecall dispatch (scause=8) | ✅ |
+| Aero-language U-mode app linked into kernel image | ✅ |
 
-1. **Determinism over average speed.** 最坏情况才是关键。
-2. **Single address space.** 不切页表，不 TLB shootdown。
-3. **Fast path = zero allocation.** 任何 malloc = 无限抖动。
-4. **Interrupts reach threads directly.** 无通用框架，无 dispatch，无 accounting。
-5. **No global interrupt-disable / preemption-disable critical sections.** 用优先级屏蔽。
-6. **Measurement infrastructure is first-class.** 与内核同生共死，不是事后追加。
+## Design principles (never violate)
 
-## 文档索引
+1. **Determinism over average speed.** Worst-case matters most.
+2. **Single address space.** No page table switches, no TLB shootdown.
+3. **Fast path = zero allocation.** Any `malloc` means unbounded jitter.
+4. **Interrupts reach threads directly.** No generic framework, no dispatch, no accounting.
+5. **No global interrupt-disable / preemption-disable critical sections.** Use priority masking.
+6. **Measurement infrastructure is first-class.** Built with the kernel, not after.
+
+## Repository structure (26R1)
 
 ```
-public/
-├── README.md                    ← 你正在读
-├── QUICKSTART.md                ← 10 分钟跑起来
-├── ARCHITECTURE.md              ← 内核架构总览
-├── API-REFERENCE.md             ← C / Aero API 参考
-├── SYSCALLS.md                  ← U-mode syscall 表
-├── WRITING-UMODE-APPS.md        ← 怎么用 Aero 写用户态程序
-├── HARDWARE.md                  ← QEMU virt 硬件映射 / 定时器 / 内存布局
-├── VERSIONING.md                ← 版本命名规范（26 / 27 / LTS / STS / T 补丁）
-└── CHANGELOG.md                 ← 版本更新记录
+kernel/
+  src/
+    boot/riscv64/start.S        # Boot entry (assembly)
+    boot/riscv64/trap.S         # Trap handler + syscall dispatch
+    driver/riscv64/             # UART, CLINT, stubs
+    mm/                         # Page allocator + heap
+    sched.c                     # Scheduler + syscall backends
+    syscall_shim.S              # ecall wrappers for U-mode → S-mode
+    main.aero                   # #[entry] kernel_start()
+    userapp.aero                # Aero-written U-mode demo app
+    Aero.toml                   # Aero package config
+target/
+  riscv64-qemu-virt/
+    linker.ld                   # Custom linker script (0x80200000 entry)
+release.sh                      # Builds public .zip packages
+run-qemu.sh                     # One-command QEMU launch
+test-boot.sh / test-interrupt.sh # P1.7 acceptance scripts (.exit 0 = all PASS)
+public/                         # ← You are here
+docs/                           # Internal design docs, P1 acceptance report
 ```
+
+## Names
+
+| Role | Value |
+|---|---|
+| Display name | `AeroOS 26R1` |
+| Technical name | `aeroos-26r1` (all-lowercase, dashes) |
+| Kernel image | `AeroOS-26R1-riscv64.elf` / `.bin` |
+| Zip packages | `aeroos-26r1-riscv64-qemu.zip`, `aeroos-26r1-source.zip` |
+| Version string | `26R1` (birth year 2026 + Release + serial 1) |
+
+See [VERSIONING.md](VERSIONING.md) for the full 26 / 27 / LTS / STS / T-patch rules.
+
+## License
+
+Apache-2.0. See the LICENSE file. GPL's strong copyleft would deter adoption in commercial real-time systems — that choice is intentional.

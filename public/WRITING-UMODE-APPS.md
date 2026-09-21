@@ -1,83 +1,90 @@
-# Writing U-mode Apps — 用 Aero 语言写用户态程序
+> **[中文版本 →](zh-CN/WRITING-UMODE-APPS.md)**
 
-## 它怎么工作
+# Writing U-mode Apps — Aero userland for AeroOS 26R1
+
+## How it works
 
 ```
-userapp.aero (Aero 代码)
-    │
-    ▼ aero 编译器 --emit-obj --target riscv64-unknown-none
-userapp.o (RISC-V 目标文件)
-    │
-    ▼ aero-ld + linker.ld → AeroOS-26R1-riscv64.elf
-内核镜像（包含 S-mode 内核 + U-mode userapp）
-    │
-    ▼ QEMU -kernel → OpenSBI → kernel_start → scheduler_demo()
-scheduler_create2(userapp_main, 1)   ← 创建 U-mode task
-    │
-    ▼ timer interrupt / sret 进入
-userapp_main() 在 U-mode 里运行！
+userapp.aero                     syscall_shim.S                    trap.S                     api.c
+───────────                      ───────────────                   ────────                   ─────
+Aero source
+ │
+ ▼ aero --emit-obj --target riscv64-unknown-none
+userapp.o (riscv64 object)
+ │
+ ▼ aero-ld + linker.ld → AeroOS-26R1-riscv64.elf
+Single kernel image: S-mode kernel + U-mode userapp, linked together
+ │
+ ▼ QEMU -kernel → OpenSBI → kernel_start → scheduler_demo()
+scheduler_create2(userapp_main, 1)    ← create U-mode task
+ │
+ ▼ timer interrupt + sret enters U-mode
+userapp_main() runs!
 ```
 
-**关键概念**：26R1 没有文件系统，U-mode 程序不是独立 ELF。它编译成 `.o` 之后和 S-mode 内核一起链接进同一个镜像。这是 single-address-space 设计原则的体现。
+**Key concept**: AeroOS 26R1 has no file system. The U-mode program is **not** a standalone ELF. It compiles to `.o` and gets linked into the kernel image alongside the S-mode code. This is what "single address space" (design principle 2) looks like in practice.
 
-## 最小可运行示例
+## Minimal working example
 
-`myapp.aero`：
+`myapp.aero`:
 ```aero
-// 1. 声明 syscall（Aero 不支持 inline asm，必须从 C 导入）
+// 1. Declare syscalls. Aero v1.2.4 lacks inline asm for bare-metal targets,
+//    so every syscall comes from an "extern C" shim in syscall_shim.S.
 extern "C" fn sys_write(s: str, n: i64) -> i64;
 extern "C" fn sys_yield();
 
-// 2. #[no_mangle] 保证符号名不被 Aero 混淆，scheduler_create2 能找到
+// 2. #[no_mangle] — critical! Without this, Aero name-mangles the function
+//    and scheduler_create2() cannot find it by symbol name.
 #[no_mangle]
 fn myapp_main() {
     let mut count = 0;
     loop {
         sys_write("hello from myapp\n", 17);
         count = count + 1;
-        sys_yield();   // 主动让 CPU
+        sys_yield();   // yield CPU — keeps S-mode tasks running too
     }
 }
 ```
 
-**但光写 `myapp.aero` 还不够**。你还需要告诉调度器"创建这个 task"。有两种方式：
+## Tell the scheduler to create this task
 
-### 方式 1：在 `main.aero` 里加一行（推荐，26R1 现状）
+You have two options.
+
+### Option 1 — Add it in `main.aero` (recommended, 26R1 default)
 
 ```aero
-// main.aero 里 extern "C" 声明 scheduler_create2
+// main.aero
 extern "C" fn scheduler_create2(entry: u64, priority: u64);
 
 #[entry]
 #[no_mangle]
 fn kernel_start() {
     aeroos_uart_puts("AeroOS 26R1 booting...\n");
-    // ... 其他 demo ...
+    scheduler_demo();        // default 4 S-mode + 1 U-mode tasks
 
-    scheduler_demo();       // 创建 T0-T3 S-mode + 默认 userapp
-    // 如果你想加自己的 task：
-    scheduler_create2(myapp_main as u64, 1);  // ← 加这一行
+    // ← add your task here:
+    scheduler_create2(myapp_main as u64, 1);
 
     timer_enable();
     worker_0();
 }
 ```
 
-### 方式 2：用 sys_fork 从已有 U-mode 创建新的（还没写过，理论可行）
+### Option 2 — Spawn from an existing U-mode task via `sys_fork` (untested in 26R1)
 
 ```aero
 #[no_mangle]
 fn myapp_main() {
     sys_write("hello\n", 6);
-    // sys_fork(another_app as u64);  // 创建另一个 U-mode task
+    // sys_fork(another_app as u64);   // spawns another U-mode task
 }
 ```
 
-## Syscall 汇编 shim
+## The syscall assembly shim
 
-Aero 语言目前（v1.2.4）不支持 inline asm。每次 `ecall` 必须通过一个汇编包装函数。26R1 里已经写好了：
+Aero v1.2.4 (released 2026-10-03) supports `asm!` for x86 but not for RISC-V bare-metal targets. The workaround is a small assembly file that Aero code can `extern "C"` against:
 
-**`syscall_shim.S`**（你不用改，了解一下就行）：
+**`syscall_shim.S`** (you don't need to edit this):
 ```asm
     .section .text.userapp
 
@@ -89,70 +96,104 @@ sys_write:
     ecall
     ret
     .size   sys_write, . - sys_write
+
+# void sys_yield(void)
+    .globl  sys_yield
+    .type   sys_yield, @function
+sys_yield:
+    li   a7, 2
+    ecall
+    ret
+    .size   sys_yield, . - sys_yield
 ```
 
-build.sh 里这个文件会被编译成 `syscall_shim.o`，和你的 `.aero` 一起链接。
+`build.sh` compiles this to `syscall_shim.o` and links it alongside your `.aero` output.
 
-## 编译命令
+## Build command
 
 ```bash
-# 用 Aero 编译器生成目标文件
+# 1. Compile Aero → riscv64 object
 aero build myapp.aero --emit-obj --target riscv64-unknown-none
-# 产物：myapp.o
+#    → myapp.o
 
-# 然后和其他 .o 一起链接
-aero-ld -T linker.ld -o AeroOS.elf boot.o trap.o ... myapp.o syscall_shim.o ...
+# 2. Link everything together (build.sh does this for you)
+aero-ld -T target/riscv64-qemu-virt/linker.ld \
+        -o build/AeroOS-26R1-riscv64.elf \
+        boot.o trap.o uart.o clint.o sched.o \
+        myapp.o syscall_shim.o \
+        main.o
 ```
 
-## 限制（26R1 已知）
+## What `a7` numbers mean
 
-| 限制 | 原因 | 什么时候解决 |
-|------|------|-------------|
-| 不能用 inline asm | Aero v1.2.4 还没实现 | 26R2+ 或者自己写 C shim |
-| 没有 stdlib | AeroOS 是裸机内核，没有 libc | 用户程序自己写或引轻量库 |
-| 不能 malloc | 没有堆分配器暴露给 U-mode | P2+ 加 U-mode heap |
-| 没有文件系统 | 没 initrd，没 virtio-blk | 26R3 或 27 |
-| 没有 PMP 保护 | OpenSBI 默认允许全地址访问 | 安全需求驱动 |
-| link.ld 地址硬编码 | U-mode entry 必须在特定虚拟地址 | 加符号表/动态加载 |
+| a7 | Macro name | Purpose |
+|---|---|---|
+| 1 | `SYS_WRITE` | Write to UART |
+| 2 | `SYS_YIELD` | Voluntarily relinquish CPU |
+| 3 | `SYS_EXIT` | Terminate this U-mode task |
+| 4 | `SYS_FORK` | Create a new U-mode task |
 
-## 调试 U-mode 程序
+Each number is a contract between `syscall_shim.S` (userland side) and `trap.S trap_ecall` (kernel side). Changing a number is a breaking ABI change.
 
-最简单的方法——**在 sys_write 里打点**：
+## Debugging U-mode apps
+
+**Method 1 — sys_write logging**
 ```aero
 #[no_mangle]
 fn myapp_main() {
-    sys_write("A: ", 3);   // 检查是否进了 myapp
-    sys_write("B: ", 3);   // 检查某条路径
-    // ...
-    sys_write("C: done\n", 8);
+    sys_write("ENTER myapp_main\n", 17);
+    sys_write("before fork\n", 13);
+    sys_fork(child_fn as u64);
+    sys_write("after fork\n", 12);
 }
 ```
 
-如果想停住等你读，可以把 loop 改成只跑一次：
+**Method 2 — Run once then yield forever**
 ```aero
 #[no_mangle]
 fn myapp_main() {
     sys_write("hello once\n", 11);
     loop {
-        sys_yield();   // 原地等
+        sys_yield();   # park here while other tasks run
     }
 }
 ```
 
-## 完整目录结构参考
+**Method 3 — No QEMU graphics**
+`run-qemu.sh` uses `-nographic`. If your code crashes, the trap handler prints a panic + register dump to UART. Read the output — it contains `sepc`, `scause`, and all 30 registers — that's everything you need.
+
+## Known limitations (26R1)
+
+| Limitation | Reason |
+|---|---|
+| No inline asm in Aero (riscv64 target) | v1.2.4 parser gap |
+| No stdlib | AeroOS has no libc, no heap exposed to U-mode |
+| No `malloc` | U-mode heap allocator not exposed |
+| No file system | No initrd, no virtio-blk, no FAT/ext2 driver |
+| No PMP memory protection | OpenSBI default PMP allows U-mode full address access |
+| `linker.ld` addresses are hardcoded | U-mode entry points must match specific virtual addresses |
+
+All of these are trackable. None are architectural blockers.
+
+## Repository structure (reference)
 
 ```
 AeroOS-26R1/
 ├── kernel/src/
-│   ├── main.aero              ← kernel entry (改这里调 scheduler_create2)
-│   ├── userapp.aero           ← 官方示例 U-mode 程序
-│   ├── boot/riscv64/
-│   │   ├── start.S
-│   │   └── trap.S             ← trap handler + syscall dispatch
-│   ├── sched.c                ← scheduler_create2() / aeroos_sys_fork()
-│   └── syscall_shim.S         ← ecall 汇编包装（U-mode → S-mode 的桥）
+│   ├── main.aero                    # #[entry] kernel_start()
+│   ├── userapp.aero                 # official U-mode demo app
+│   ├── boot/riscv64/start.S         # boot entry
+│   ├── boot/riscv64/trap.S          # trap handler + syscall dispatch
+│   ├── sched.c                      # scheduler_create2(), aeroos_sys_fork()
+│   └── syscall_shim.S               # ecall wrappers (U-mode → S-mode bridge)
 ├── target/riscv64-qemu-virt/
-│   └── linker.ld              ← 决定各段虚拟地址
-├── build.sh                   ← 一键构建
-└── run-qemu.sh                ← 一键运行
+│   └── linker.ld                    # controls section addresses
+├── build.sh                         # one-command build
+└── run-qemu.sh                      # one-command run
 ```
+
+## See also
+
+- [SYSCALLS.md](SYSCALLS.md) — full a7 table, argument layouts, backend source
+- [API-REFERENCE.md](API-REFERENCE.md) — complete kernel and user API inventory
+- [ARCHITECTURE.md](ARCHITECTURE.md) — context frame, trap flow, U-mode task creation internals

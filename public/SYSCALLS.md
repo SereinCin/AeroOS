@@ -1,123 +1,142 @@
+> **[中文版本 →](zh-CN/SYSCALLS.md)**
+
 # Syscall Table — AeroOS 26R1
 
-## 概述
+## Overview
 
-U-mode 用户态程序通过 **ecall 指令**陷入 S-mode。trap.S 的 `trap_ecall` handler 根据 `a7` 寄存器分发到对应后端。
+U-mode userland issues an **ecall** instruction to trap into S-mode. `trap.S`'s `trap_ecall` handler dispatches based on the `a7` register.
 
 ```
-U-mode:  li a7, <syscall_num>
-         ecall                  ← scause = 8, sret 返回
-                              ↓
+U-mode:  li   a7, <syscall_number>
+         ecall                 # scause = 8 → trap_ecall
+                            ↓
 trap.S:  trap_ecall (scause & 0x3FF == 8)
               ↓
-         a7 == 1 → aeroos_sys_write()
-         a7 == 2 → asm yield handler
-         a7 == 3 → asm exit handler
-         a7 == 4 → aeroos_sys_fork()
+         a7 == 1 → aeroos_sys_write()       (C backend)
+         a7 == 2 → yield  (asm handler)      (inline in trap.S)
+         a7 == 3 → exit   (asm handler)      (inline in trap.S)
+         a7 == 4 → aeroos_sys_fork()         (C backend)
               ↓
-         trap_return → sret → 回到 U-mode
+         trap_return → sret → back to U-mode
 ```
 
-## 完整 syscall 表
+## Full syscall table
 
-| a7 | 名称 | a0 | a1 | a2 | 后端 | 26R1 状态 |
-|----|------|----|----|----|------|----------|
-| 1 | `sys_write` | `s: str*` | `n: i64` | — | C `aeroos_sys_write()` | ✅ 可用 |
-| 2 | `sys_yield` | — | — | — | asm yield（直接调 scheduler_tick） | ✅ 可用 |
-| 3 | `sys_exit` | — | — | — | asm exit（当前 task 停止） | ✅ 可用 |
-| 4 | `sys_fork` | `entry: u64` | — | — | C `aeroos_sys_fork()` → `scheduler_create2()` | ✅ 可用 |
+| a7 | Name | a0 | a1 | a2 | Backend | 26R1 |
+|---|---|---|---|---|---|---|
+| 1 | `sys_write` | `s: str*` | `n: i64` | — | C `aeroos_sys_write()` | ✅ |
+| 2 | `sys_yield` | — | — | — | asm yield | ✅ |
+| 3 | `sys_exit` | — | — | — | asm exit | ✅ |
+| 4 | `sys_fork` | `entry: u64` | — | — | C `aeroos_sys_fork()` | ✅ |
 
-## sys_write (a7=1)
+Argument register convention follows the standard RISC-V calling convention: a0 – a7 for arguments, a0 for return value.
 
-**C 签名**：
+## sys_write (a7 = 1)
+
+**C signature**:
 ```c
 int64_t sys_write(const char *s, int64_t n);
 ```
 
-**参数**：
-| 寄存器 | 含义 |
-|--------|------|
-| a0 | 字符串指针（虚拟地址，U-mode 可访问） |
-| a1 | 要写入的字节数 |
-
-**返回值**（a0）：实际写入字节数。成功 = min(n, strlen(s))，失败 = -1。
-
-**示例**（汇编）：
-```asm
-    li   a7, 1
-    la   a0, msg           # "hello from Aero\n"
-    li   a1, 16
-    ecall
-```
-
-**示例**（Aero）：
+**Aero declaration**:
 ```aero
 extern "C" fn sys_write(s: str, n: i64) -> i64;
-
-sys_write("hello\n", 6);
 ```
 
-后端实现（`sched.c`）：
+| Register | Meaning |
+|---|---|
+| a0 | String pointer (U-mode virtual address) |
+| a1 | Byte count to write |
+
+Returns (a0): actual bytes written. Success = `min(n, strlen(s))`. Failure = -1.
+
+**Assembly example**:
+```asm
+    li   a7, 1
+    la   a0, msg           # "hello\n"
+    li   a1, 6
+    ecall
+    # a0 = 6 on success
+```
+
+**Aero example**:
+```aero
+sys_write("hello from Aero\n", 16);
+```
+
+Backend (`sched.c`):
 ```c
 int64_t aeroos_sys_write(const char *s, int64_t n) {
     int64_t written = 0;
     for (int64_t i = 0; i < n; i++) {
         if (s[i] == '\0') break;
-        aeroos_uart_putc(s[i]);
+        aeroos_uart_putc(s[i]);    # hardware-backed; no UART FIFO magic
         written++;
     }
     return written;
 }
 ```
 
-## sys_yield (a7=2)
+> Note: 26R1 directly dereferences the U-mode pointer. OpenSBI's default PMP allows full-address-space U-mode access, so this works. When PMP memory protection is added (future version), this needs a proper `copy_from_user`.
 
-**参数**：无
+## sys_yield (a7 = 2)
 
-**返回**：正常返回（task 被重新调度，可能换了别的 task）
+**Parameters**: none
+**Return**: normal return (the same U-mode code continues, but may be on a different CPU or after other tasks ran — in 26R1 it's a single core, so just round-robined)
 
-**为什么重要**：26R1 是 cooperative yield + preemptive timer 双轨制：
-- U-mode 程序**主动 yield** → 公平性好
-- Timer interrupt **强制抢占**（0.2s 周期）→ 保证不饿死
-- S-mode 内核代码**不能**用 sys_yield，它没有 ecall 权限
+**Why it matters**: AeroOS uses a dual-track scheduler:
+- U-mode tasks **voluntarily yield** → fairness without starvation
+- Timer interrupt (0.2s period) **forcibly preempts** → guaranteed non-starvation for tasks that never yield
 
-**后端**（`trap.S` 内联 asm handler）：
+S-mode kernel code **cannot** call this — S-mode doesn't have ecall permissions in the same way; the scheduler ticks via `scheduler_tick()` directly.
+
+Backend (inline asm in `trap.S`):
 ```asm
 trap_yield:
     call    scheduler_tick
-    mv      sp, a0
+    mv      sp, a0               # switch to next task's frame
     j       trap_return
 ```
 
-## sys_exit (a7=3)
+## sys_exit (a7 = 3)
 
-终止当前 U-mode task。task context 框架保留在内存，当前版本不清理（这是已知限制，后续版本加回收）。
+Terminates the calling U-mode task. Context frame remains resident in memory — task stack is not reclaimed in 26R1 (known limitation). Future versions will add proper cleanup and a `sys_wait` / `sys_reap` pair.
 
-## sys_fork (a7=4)
+## sys_fork (a7 = 4)
 
-从 U-mode 创建新的 U-mode task。
+Spawn a new U-mode task from U-mode.
 
-**参数**：
-| 寄存器 | 含义 |
-|--------|------|
-| a0 | 新 task 的入口地址（虚拟地址） |
+| Register | Meaning |
+|---|---|
+| a0 | New task's entry point (virtual address in U-mode code segment) |
 
-**返回**（a0）：新 task 的 task ID（≥ 0 成功），-1 失败。
+Returns (a0): new task's numeric ID (≥ 0 on success), -1 on failure.
 
-**注意事项**：
-1. `entry` 地址必须在 U-mode 代码段内。link.ld 把 userapp.aero 的代码放在 kernel image 特定段，entry 必须指向那里。
-2. 新 task 的 sstatus 初始化成 U-mode（SPP=0, SPIE=1）。
-3. 新 task 初始栈 = 独立 context frame（8 KB，从堆分配）。
+**C declaration**:
+```c
+int64_t sys_fork(uint64_t entry);
+```
 
-## 新增 syscall 的流程
+**What it does**:
+1. Allocates a new 8 KB stack for the new task
+2. Initializes a context frame: `sepc = entry`, `sstatus.SPP = 0` (U-mode), all GP regs = 0
+3. Calls `scheduler_create2(entry, 1)`
+4. Returns the new task's index into the task table
 
-1. 在 `api.c` 添加 C backend：`int64_t aeroos_sys_xxx(uint64_t arg...)`
-2. 在 `trap.S trap_ecall` handler 添加 a7 分发 case：
+**Important constraints**:
+1. `entry` must point into the U-mode code section. `aero-ld` places this at a known virtual address — the linker script controls this.
+2. The new task **shares the same address space** with the parent (single-address-space design principle 2). No page-table copying, no COW.
+3. There is no parent/child PID distinction. Just two U-mode tasks.
+
+## Adding a new syscall
+
+1. **C backend** — add `int64_t aeroos_sys_xxx(...)` in `api.c`
+2. **trap.S dispatch** — add a case in `trap_ecall`:
    ```asm
    li    t2, <new_a7>
    beq   t2, a7, trap_xxx
    ```
-3. 在 `syscall_shim.S` 添加汇编 shim：
+3. **asm shim** — add in `syscall_shim.S`:
    ```asm
    .globl  sys_xxx
    .type   sys_xxx, @function
@@ -127,10 +146,14 @@ trap_yield:
        ret
    .size   sys_xxx, . - sys_xxx
    ```
-4. 在 `public/SYSCALLS.md` 和 `public/API-REFERENCE.md` 更新表
+4. **Update docs** — `SYSCALLS.md`, `API-REFERENCE.md` (English + zh-CN)
 
-## 已知限制
+## Known limitations
 
-- Syscall 表目前只有 4 个（write / yield / exit / fork）。完整 POSIX 兼容（open / read / close / mmap 等）需要文件系统和页表，26R1 范围外。
-- U-mode → kernel buffer 拷贝还没有，sys_write 直接读 U-mode 指针（OpenSBI 默认 PMP 允许全地址访问）。26R2+ 加 PMP 后需要加 copy_from_user。
-- sys_fork 不复制地址空间（没有页表），创建的是新 task 指向同一份代码/数据。
+| Limitation | Reason | Plan |
+|---|---|---|
+| Only 4 syscalls | 26R1 scope: boot + scheduler + U-mode demo | Full POSIX surface (open/read/close/mmap/execve/signal) = file system + page tables |
+| `sys_write` dereferences U-mode pointer directly | OpenSBI PMP allows it | Add `copy_from_user` when PMP protection lands |
+| `sys_fork` does not copy address space | Single-address-space principle 2 | Future `sys_spawn` for true isolation if needed |
+| No PID / wait / reap | 26R1: tasks are round-robined, no task lifecycle management | `sys_wait`, `sys_reap` |
+| No `brk` / `mmap` for U-mode heap | No U-mode heap allocator exposed | P2+ |

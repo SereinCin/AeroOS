@@ -1,62 +1,60 @@
-# Hardware — QEMU virt 硬件映射
+> **[中文版本 →](zh-CN/HARDWARE.md)**
 
-26R1 目标平台是 **QEMU riscv64 virt**（`-machine virt`）。本节描述这个平台的内存、外设、定时器——写驱动或移植到真机时需要参考。
+# Hardware — QEMU virt Platform Reference
 
-## 平台信息
+26R1 targets **QEMU riscv64 virt** (`-machine virt`). This page documents the exact memory map, device registers, and timer behavior you need when writing drivers or porting to real hardware.
 
-| 项 | 值 |
-|----|-----|
+## Platform summary
+
+| Item | Value |
+|---|---|
 | QEMU machine | `riscv64 virt` |
-| CPU | 单 hart, RV64GC |
-| RAM | 128 MB（默认） |
-| BIOS | OpenSBI v1.3 (default, FW_DYNAMIC) |
-| Timer | ACLINT MTIMER @ 10 MHz |
-| Console | UART8250 (NS16550) @ 1.8432 MHz |
+| CPU | Single hart, RV64GC |
+| RAM | 128 MB (default) |
+| BIOS | OpenSBI v1.3, FW_DYNAMIC mode |
+| Timer | ACLINT MTIMER @ 10 MHz (timebase = 0.1 µs / tick) |
+| Console | UART8250 (NS16550 compatible) @ 1.8432 MHz crystal |
 
-## 物理内存布局
+## Full physical address map
 
 ```
 0x00000000 ──────────────────────────────────────────┐
-                                                      │
+                                                      │ MMIO
 0x10000000 ─────────┐                                │
-                     │ MMIO range                     │ 设备寄存器
-0x100000C0 ─────────┤ UART8250 UART0                 │
-                     │ (NS16550, 3.3V)                │
-0x10000000 ─────────┘                                │
-                                                      │
-0x20000000 ─────────┐                                │
-                     │ QEMU virt reserved MMIO        │
-0x20FFFFF0 ─────────┘                                │
-                                                      │
+                     │ NS16550 UART0 (UART8250)       │ Device registers
+0x100000C0 ─────────┤ (3.3V, 115200 8N1)             │
+                     │                                │
+0x20000000 ─────────┤ QEMU virt reserved MMIO        │
+                     │                                │
 0x80000000 ─────────┐                                │
-                     │ OpenSBI FW_DYNAMIC             │
-0x8004FFFF ─────────┘                                │ 固件
-                     │ (~322 KB)                       │
+                     │ OpenSBI FW_DYNAMIC             │ Firmware
+0x8004FFFF ─────────┘ (~322 KB)                       │
+                     │                                │
 0x80080000 ─────────┐                                │
-                     │ ACLINT MTIMER                  │
-0x800BFFFF ─────────┤ (10 MHz, read-only)             │
-0x800C0000 ─────────┤ ACLINT MSWI                     │
+                     │ ACLINT MTIMER (read-only)      │ Timer
+0x800BFFFF ─────────┤ ACLINT MSWI (machine software)  │
 0x800FFFFF ─────────┘                                │
                                                       │
 0x80200000 ─────────┐                                │
-                     │ AeroOS 内核镜像                │
-0x802FFFFF ─────────┤  (.text + .rodata + .data)      │ 内核
-                     │  ~65 KB                          │
-0x80300000 ─────────┤ _kernel_end                     │
-                     │ kmalloc / page allocator        │
-                     │                                  │ 堆
+                     │ AeroOS kernel image (loaded by  │ Kernel
+                     │ OpenSBI FW_DYNAMIC per ELF      │
+                     │ segments)                       │
+                     │                                  │
+                     │ .text + .rodata + .data: ~65 KB  │
+0x80303000 ─────────┤ _kernel_end                      │
+                     │ kmalloc / page allocator heap    │ Heap
                      │                                  │
                      │                                  │
-0x88000000 ─────────┘                                │ RAM top
+0x88000000 ─────────┘ QEMU virt RAM top (128 MB)     │ RAM
 ```
 
-## UART8250 (NS16550) — 串口
+## NS16550 UART
 
-**基地址**：`0x10000000`
+**Base address**: `0x10000000`
 
-| 偏移 | 读 | 写 |
-|------|----|----|
-| +0 | RBR (接收缓冲) | THR (发送保持) |
+| Offset | Read | Write |
+|---|---|---|
+| +0 | RBR (Receive Buffer) | THR (Transmit Holding) |
 | +1 | IER | IER |
 | +2 | IIR | FCR |
 | +3 | LCR | LCR |
@@ -65,113 +63,147 @@
 | +6 | MSR | — |
 | +7 | SCR | SCR |
 
-**波特率**：默认 115200，8N1（QEMU 硬编码）
+**Baud rate**: QEMU hardcodes 115200, 8 data bits, no parity, 1 stop bit. The divisor register path (DLAB bit + DLL/DLM) exists but QEMU does not actually change the rate.
 
-**26R1 驱动**（`uart.c`）：
+**26R1 driver** (`uart.c`):
 ```c
 #define UART0_THR  0x10000000
+#define UART0_LSR  (UART0_THR + 5)
 
 void aeroos_uart_putc(char c) {
-    while ((*(volatile uint8_t*)UART0_LSR & 0x20) == 0) {
-        // wait THR empty
-    }
+    // Wait until THR is empty (LSR bit 5 = 1)
+    while ((*(volatile uint8_t*)UART0_LSR & 0x20) == 0) {}
     *(volatile uint8_t*)UART0_THR = c;
 }
 ```
 
-## CLINT MTIMER — 定时器
+## CLINT MTIMER — The Most Important Timer
 
-**基地址**：`0x80080000`（QEMU virt 上）
+**Base address**: `0x80080000` (on QEMU virt — this varies by board!)
 
-**频率**：10 MHz（timebase = 0.1 µs per tick）
+**Frequency**: 10 MHz → each tick = 0.1 µs. So 0.2s = 2,000,000 ticks.
 
-**26R1 用法**：通过 **legacy SBI set_timer** 设置新触发时间（不直接写 CLINT 寄存器）：
+### Why we use SBI `set_timer` instead of writing CLINT directly
+
+OpenSBI v1.3 handles the MTIMERCMP register. From S-mode we can only call:
 ```
-rdtime a0              # 读当前 time
-add    a0, a0, 2000000 # 加 0.2s × 10MHz = 2,000,000 ticks
-li     a1, a0
-li     a7, 0           # legacy SBI EID=0 (Set Timer)
-ecall                  # OpenSBI 设置 MTIMECMP = a1
+li   a7, 0              # legacy SBI Extension ID = 0 (Set Timer)
+ecall                   # a1 = new compare value
 ```
+OpenSBI writes `a1` into MTIMERCMP and re-enables the timer. Direct S-mode writes to CLINT registers are intercepted by OpenSBI.
 
-**Timer interrupt handler 必须做两件事**：
-1. **re-arm**：调 SBI set_timer 设新的 MTIMECMP（没有这步，MTIP 永远不重新 pending）
-2. **STIE + SIE 必须打开**：否则即使 MTIP pending 也不会触发 trap
+### Timer interrupt handler — must do two things
 
 ```c
-// timer_enable() 必须做：
-timer_arm(TIMER_INTERVAL);   // ① 设 MTIMECMP
-csrs sie, (1 << 5);          // ② 开 STIE (bit 5)
-csrs sstatus, (1 << 1);      // ③ 开 SIE  (bit 1)
+void irq_timer(void) {
+    // 1. RE-ARM the timer ← WITHOUT THIS, MTIP will never fire again
+    uint64_t next = read_mtime() + 2000000;   // next fire in 0.2s
+    sbi_set_timer(next);                       // SBI call
+
+    // 2. Open interrupts
+    csrs sie, (1 << 5);     // STIE (bit 5)
+    csrs sstatus, (1 << 1); // SIE   (bit 1)
+}
 ```
 
-> **根因 bug 回顾**：如果只做 ②③ 不做 ①，MTIMECMP 已经被硬件超过了，永远不会再 pending MTIP。这是 26R1 早期 timer interrupt 不触发的原因。
+**Root cause bug (26R1)**: If you only do step 2 (enable STIE + SIE) but skip step 1, MTIMECMP is already past `mtime` and will never trigger again. The timer interrupt fires **once** then the OS hangs. See `docs/P1-验收报告.md` for the full bug hunt.
 
-## OpenSBI FW_DYNAMIC — 固件
+### `timer_enable()` — the actual code path
 
-OpenSBI v1.3 启动流程：
-```
-M-mode: OpenSBI 初始化 PMP + timer + console
-        │
-        ▼ FW_DYNAMIC: 把 kernel ELF 加载到 RAM
-        │
-        ▼ OpenSBI jump to kernel @ 0x80200000
-        │ (sret to S-mode, SPP=1, SPV=1, S-mode supervisor)
-        ▼
-        AeroOS kernel_start() @ S-mode
+```c
+void timer_enable(void) {
+    timer_arm(TIMER_INTERVAL);      // step 1: arm MTIMECMP
+    csrs sie, (1 << 5);             // step 2: STIE
+    csrs sstatus, (1 << 1);         // step 3: SIE
+}
 ```
 
-**FW_DYNAMIC 语义**：OpenSBI 不硬编码 kernel 地址，它读 `-kernel` 参数里的 ELF header，按 ELF load segment 把 kernel 放到 RAM。我们的 linker.ld 里：
+## OpenSBI FW_DYNAMIC boot flow
+
+OpenSBI v1.3 boots QEMU virt with FW_DYNAMIC — it does **not** hardcode the kernel address.
+
+```
+M-mode: OpenSBI
+ │  1. Initialize PMP (allow kernel RAM access)
+ │  2. Initialize timer + console (UART)
+ │  3. Read -kernel argument → parse ELF header
+ │  4. Load ELF segments into RAM
+ │  5. Jump to ELF entry (0x80200000 = _start)
+ │
+ ▼
+M-mode → S-mode transition (sret with SPP=1)
+ │  satp = 0 (bare mode, no page tables)
+ │  medany code model
+ │
+ ▼
+_start (boot/riscv64/start.S)
+```
+
+Linker script:
 ```ld
 ENTRY(_start)
 SECTIONS {
     . = 0x80200000;
     .text : { ... }
+    .rodata : { ... }
     .data : { ... }
+    _kernel_end = .;
 }
 ```
 
-## QEMU 启动命令详解
+## QEMU launch command — annotated
 
 ```bash
 qemu-system-riscv64 \
-    -machine virt                    # QEMU virt machine (有 OpenSBI / CLINT / UART)
-    -bios default                    # 用 QEMU 内置 OpenSBI v1.3
-    -kernel AeroOS-26R1-riscv64.elf  # OpenSBI FW_DYNAMIC 加载 + 跳转
-    -nographic                      # 不弹图形窗口，输出到 stdout
-    -monitor none                    # 不弹 monitor（Ctrl-A C 的那种）
-    -smp 1                           # 单 hart（26R1 还没做 SMP）
-    -m 128M                          # 128MB RAM（默认值，显式写上更清楚）
+    -machine virt               # Provides: OpenSBI FW_DYNAMIC + CLINT + UART + PLIC
+    -bios default               # Bundled OpenSBI v1.3 — no need to download firmware
+    -kernel AeroOS-26R1-riscv64.elf  # OpenSBI parses this ELF, loads segments, jumps to entry
+    -nographic                  # No GUI window — UART goes straight to terminal
+    -monitor none                # Disable QEMU monitor (Ctrl-A C would otherwise open it)
+    -smp 1                       # Single hart (26R1 is not SMP)
+    -m 128M                      # 128 MB RAM (explicit; default is also 128M)
 ```
 
-| 参数 | 为什么 |
-|------|--------|
-| `-machine virt` | 提供 OpenSBI FW_DYNAMIC 固件 + CLINT MTIMER + UART8250 + PLIC |
-| `-bios default` | 用 QEMU 打包的 OpenSBI v1.3，不需要自己找 firmware |
-| `-kernel` | OpenSBI FW_DYNAMIC 语义：读 ELF header → 按 load segment 放 RAM → 跳 ELF entry |
-| `-nographic` | kernel UART 输出直接到终端，方便 debug |
+## Porting checklist — QEMU virt → real hardware
 
-## 移植到真机时需要改的地方
+| Component | QEMU virt value | What real boards vary on |
+|---|---|---|
+| UART base | `0x10000000` | VisionFive 2: same; HiFive 1: `0x10010000` |
+| Timer frequency | 10 MHz | VisionFive 2: same; other boards may differ |
+| CLINT base | `0x80080000` | Some boards use `0x20000000` |
+| OpenSBI | QEMU-bundled | Build your own FW_DYNAMIC firmware per board |
+| Boot media | `-kernel` direct load | SD card / SPI NOR → OpenSBI loads kernel from media |
+| RAM size | 128 MB | Usually 2 GB+ on real boards |
+| SMP | 1 hart | Many RISC-V boards are multi-core (26R1 is single-core only) |
 
-| 组件 | QEMU virt 值 | 真机需要什么 |
-|------|-------------|-------------|
-| UART base | `0x10000000` | VisionFive 2: `0x10000000` 相同；HiFive: 不同，查手册 |
-| Timer 频率 | 10 MHz | VisionFive 2: 10 MHz 相同；其他板不一定 |
-| CLINT base | `0x80080000` | 有的板在 `0x20000000` |
-| OpenSBI | QEMU 打包 | 自己编译 FW_DYNAMIC firmware |
-| Boot media | `-kernel` 直接加载 | SD 卡 / SPI NOR / USB，OpenSBI 先从介质加载再跳 kernel |
-| Memory size | 128 MB | 真机可能 2 GB+ |
+> **EVT note**: Real hardware bring-up for VisionFive 2 / HiFive boards is tracked as EVT (Engineering Verification Test), not as a T-patch. See [VERSIONING.md](VERSIONING.md) for the boundary.
 
-## 地址映射总结
+## CSR cheat sheet (RISC-V 64-bit supervisor)
+
+| CSR | 26R1 sets it | Purpose |
+|---|---|---|
+| `sstatus.SPP` | task frame init | Return mode: 0 = U, 1 = S |
+| `sstatus.SPIE` | trap_return (forced to 1!) | Re-enable SIE on `sret` |
+| `sstatus.SIE` | timer_enable | Supervisor interrupt enable |
+| `sie.STIE` | timer_enable | Timer interrupt enable (bit 5) |
+| `sepc` | trap entry | Where `sret` returns to |
+| `sscratch` | trap entry | Swap buffer for sp on trap |
+| `scause` | trap entry | Interrupt cause (5 = timer, 8 = ecall) |
+| `medeleg` | OpenSBI sets it | S-mode delegation of certain exceptions |
+| `mideleg` | OpenSBI sets it | S-mode delegation of certain interrupts |
+| `satp` | 0 (bare mode) | Address translation mode; 0 = no translation |
+
+### Key bit constants
 
 ```
-AeroOS 26R1 kernel 链接地址：
-  .text   = 0x80200000 (entry point)
-  .rodata = 紧随 .text
-  .data   = 紧随 .rodata
-  .bss    = 紧随 .data（清零）
-  heap    = _kernel_end（动态，页分配器从这里开始）
-
-UART0   = 0x10000000
-CLINT   = 0x80080000
+sstatus.SPP  = 1 << 8       # Previous privilege mode
+sstatus.SPIE = 1 << 5       # Previous interrupt enable (★ trap.S forces this back to 1!)
+sstatus.SIE  = 1 << 1       # Supervisor interrupt enable
+sie.STIE     = 1 << 5       # Timer interrupt enable (in sie, not sstatus)
 ```
+
+## See also
+
+- [ARCHITECTURE.md](ARCHITECTURE.md) — trap flow, context frame, scheduler with timer interrupts
+- [SYSCALLS.md](SYSCALLS.md) — ecall flow from U-mode to S-mode
+- [QUICKSTART.md](QUICKSTART.md) — annotated QEMU command in one-command run context
