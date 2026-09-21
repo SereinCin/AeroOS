@@ -52,3 +52,11 @@ fi
 
 echo '=== BUILD OK ==='
 ls -la build/AeroOS.elf
+
+# 6. 规范化交付物文件名（26R1 发布标准）
+echo '=== 6. Release packaging ==='
+cp build/AeroOS.elf build/AeroOS-26R1-riscv64.elf
+riscv64-linux-gnu-objcopy -O binary build/AeroOS.elf build/AeroOS-26R1-riscv64.bin
+
+echo '=== BUILD OK ==='
+ls -la build/AeroOS.elf build/AeroOS-26R1-riscv64.elf build/AeroOS-26R1-riscv64.bin

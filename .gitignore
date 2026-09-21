@@ -15,3 +15,6 @@ tools/aero-ld/target/
 # OS
 .DS_Store
 Thumbs.db
+
+# Release packages
+release/
