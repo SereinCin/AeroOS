@@ -66,3 +66,40 @@ copyleft would deter adoption in commercial real-time systems.
 4. Interrupts reach threads directly. No generic framework, no dispatch, no accounting.
 5. No global interrupt-disable or preemption-disable critical sections. Use priority masking.
 6. Measurement infrastructure is first-class. Built with the kernel, not after.
+
+## Development Methodology
+
+AeroOS 26R1 uses a hybrid workflow. AI assistance is used for mechanical,
+repetitive tasks, but all core design and implementation decisions are
+human-authored and reviewed.
+
+### Manually authored (~90% of the work)
+- Kernel architecture: single-address-space S-mode design rationale
+- Trap frame layout (30 registers, 240 bytes) and ecall dispatch contract
+- Preemptive round-robin scheduler logic and timer gate (STIE + SIE)
+- Memory map: OpenSBI FW_DYNAMIC handoff at 0x80200000
+- Syscall ABI: a7-based dispatch with 4 syscalls (write / yield / exit / fork)
+- Aero-binding shim design for U-mode task calling convention
+- 26 / 27 dual-line versioning model and T-patch vs EVT classification
+
+### AI-assisted (~10% of the work, mechanical only)
+- UART0 NS16550 register table lookup and bit-field configuration
+- CLINT MTIMER divider math validation (10 MHz base to 0.2 s tick)
+- Initial CI workflow YAML scaffolding
+- Release script and GitHub REST API integration boilerplate
+- Documentation first-draft (manually reviewed and rewritten)
+- Repetitive refactoring (rename local variable across 3 files)
+
+All AI-generated code passes manual review before commit. AI suggestions
+are rejected when they violate project constraints: single address space,
+zero-allocation fast path, no global interrupt-disable critical sections.
+Commit messages, design documents, and versioning policy are written
+entirely by the team.
+
+### About the history timeline
+
+The public git history shows commits from September 2026 through the
+release date. Most active development happened in a private repository
+earlier in the year; this public repository tracks the cleaned, reviewed
+code leading to the 26R1 pre-release. Individual commit timestamps
+reflect review and integration cadence, not original coding pace.
